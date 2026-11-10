@@ -80,6 +80,7 @@ services:
       retries: 20
 
   migrate:
+    image: copilot-backend:${APP_VERSION:-local}
     build:
       context: ./backend
       target: runtime
@@ -94,6 +95,7 @@ services:
         condition: service_healthy
 
   backend:
+    image: copilot-backend:${APP_VERSION:-local}
     build:
       context: ./backend
       target: runtime
@@ -107,6 +109,7 @@ services:
         condition: service_completed_successfully
 
   worker:
+    image: copilot-backend:${APP_VERSION:-local}
     build:
       context: ./backend
       target: runtime
@@ -155,6 +158,7 @@ services:
       - "127.0.0.1:11434:11434"
 
   frontend:
+    image: copilot-frontend:${APP_VERSION:-local}
     build:
       context: ./frontend
     restart: unless-stopped
@@ -163,7 +167,8 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # Loopback by default: publish it through the reverse proxy (docker-compose.prod.yml) or set FRONTEND_BIND=0.0.0.0
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -237,8 +242,30 @@ services:
     depends_on:
       - prometheus
 
+  loki:
+    image: grafana/loki:3.3.2
+    profiles: ["logging"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./infra/logging/loki.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    profiles: ["logging"]
+    restart: unless-stopped
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./infra/logging/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
   backend-test:
     profiles: ["test"]
+    image: copilot-backend-test:${APP_VERSION:-local}
     build:
       context: ./backend
       target: test
@@ -262,3 +289,5 @@ volumes:
   ollama_data:
   prometheus_data:
   grafana_data:
+  loki_data:
+  alloy_data:

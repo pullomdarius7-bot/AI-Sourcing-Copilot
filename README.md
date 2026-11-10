@@ -274,3 +274,14 @@ Assumptions: the assistant answers in English; it does not learn across conversa
 history and the entities it is about); full-text search uses PostgreSQL's language-neutral `simple` configuration so it
 works for any language without stemming; Prometheus alert rules are evaluated and visible in Prometheus and Grafana, and
 delivery (email, chat) is left to an Alertmanager you add, since none is required to run the stack.
+
+## Operations
+
+Everything needed to run this in production is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): server preparation, the
+nginx + Let's Encrypt overlay (`docker-compose.prod.yml`), releases and rollback (`scripts/deploy.sh`,
+`scripts/rollback.sh`), the GitHub Actions deployment pipeline, backup, restore and restore tests, monitoring and logging
+(compose profiles `monitoring` and `logging`), health checks, load testing (`loadtest/k6.js`), disaster recovery, and the
+security and readiness checklists.
+
+Note: the web front end is now published on 127.0.0.1 only (`FRONTEND_BIND`). On a development machine nothing changes
+(http://localhost:3000). To reach it from other machines without a reverse proxy, set `FRONTEND_BIND=0.0.0.0`.

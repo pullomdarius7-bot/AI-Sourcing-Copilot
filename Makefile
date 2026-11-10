@@ -1,4 +1,5 @@
-.PHONY: init up down logs ps build test lint migrate db-shell reset smoke monitoring monitoring-down env-upgrade
+.PHONY: init up down logs ps build test lint migrate db-shell reset smoke monitoring monitoring-down env-upgrade \
+        deploy rollback releases backup backup-verify restore validate health loadtest ssl
 
 COMPOSE ?= docker compose
 
@@ -46,6 +47,37 @@ env-upgrade:     ## Add secrets introduced by newer versions to an existing .env
 
 smoke:           ## End-to-end check through the frontend proxy
 	./scripts/smoke.sh
+
+# --- Production operations (docs/DEPLOYMENT.md) ---
+deploy:          ## Build and release the code in this directory (REF=<git ref> to fetch and deploy a ref)
+	./scripts/deploy.sh $(REF)
+
+rollback:        ## Back to the previous release (VERSION=<release> and MODE=--with-db are optional)
+	./scripts/rollback.sh $(VERSION) $(or $(MODE),--keep-db)
+
+releases:        ## List releases kept on this server
+	./scripts/rollback.sh --list
+
+backup:          ## Full backup now (database, documents, .env)
+	./scripts/backup.sh
+
+backup-verify:   ## Restore the newest backup into a scratch database to prove it works
+	./scripts/verify-backup.sh
+
+restore:         ## Restore a backup: make restore FILE=/opt/copilot/backups/copilot-....tar.gpg
+	./scripts/restore.sh $(FILE)
+
+validate:        ## Post-deployment validation
+	./scripts/validate.sh
+
+health:          ## One health probe (what cron runs every 5 minutes)
+	./scripts/healthcheck.sh
+
+ssl:             ## Obtain the first Let's Encrypt certificate
+	./scripts/ssl-init.sh
+
+loadtest:        ## k6 load test: make loadtest PROFILE=smoke|load|stress (needs LOADTEST_EMAIL, LOADTEST_PASSWORD)
+	./scripts/loadtest.sh $(or $(PROFILE),load)
 
 reset:           ## DESTROYS all data (volumes)
 	$(COMPOSE) down -v

@@ -1,0 +1,95 @@
+name: Deploy
+
+# Releases to the production server over SSH after CI passes on main, or on demand (deploy any ref, or roll back).
+# The server builds the images itself from the checked-out commit; no registry is involved.
+#
+# Repository settings needed (Settings -> Secrets and variables -> Actions, and Settings -> Environments -> production):
+#   secrets.DEPLOY_SSH_KEY      private key whose public half is in ~deploy/.ssh/authorized_keys on the server,
+#                               restricted to scripts/ci-entry.sh (docs/DEPLOYMENT.md, section 8)
+#   secrets.DEPLOY_KNOWN_HOSTS  output of: ssh-keyscan -p <port> <host>   (pins the server's host key)
+#   vars.DEPLOY_HOST            server host name or address
+#   vars.DEPLOY_USER            deploy
+#   vars.DEPLOY_PORT            22
+#   vars.PRODUCTION_URL         https://copilot.example.com
+# Add required reviewers to the "production" environment to require approval before each release.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options: [deploy, rollback, status]
+        default: deploy
+      target:
+        description: "deploy: git ref (branch, tag or commit). rollback: release version (empty = previous release)."
+        required: false
+        default: ""
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      ACTION: ${{ github.event.inputs.action || 'deploy' }}
+      TARGET: ${{ github.event.inputs.target || github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check inputs
+        run: |
+          [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] || { echo "Set the DEPLOY_HOST and DEPLOY_USER variables."; exit 1; }
+          case "$ACTION" in deploy|rollback|status) ;; *) echo "Unknown action"; exit 1 ;; esac
+          if [ -n "$TARGET" ] && ! printf '%s' "$TARGET" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$'; then
+            echo "Target contains characters that are not allowed."; exit 1
+          fi
+          if [ "$ACTION" = "deploy" ] && [ -z "$TARGET" ]; then echo "deploy needs a git ref."; exit 1; fi
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: ${{ github.event.inputs.action || 'deploy' }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$ACTION $TARGET"
+
+      - name: Public health check
+        if: env.ACTION != 'status' && vars.PRODUCTION_URL != ''
+        env:
+          URL: ${{ vars.PRODUCTION_URL }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 15 "$URL/healthz" >/dev/null; then echo "$URL is healthy"; exit 0; fi
+            sleep 10
+          done
+          echo "$URL/healthz did not answer"; exit 1
+
+      - name: Release status
+        if: always()
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "${DEPLOY_PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "status" || true

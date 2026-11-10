@@ -2,8 +2,7 @@
 # Verifies the monitoring profile: Prometheus scrapes the API successfully and Grafana serves the provisioned dashboard.
 set -eu
 cd "$(dirname "$0")/.."
-# shellcheck disable=SC1091
-. ./.env
+GRAFANA_ADMIN_PASSWORD=$(sed -n 's/^GRAFANA_ADMIN_PASSWORD=//p' .env | tail -n1)
 PROM=${PROM_URL:-http://127.0.0.1:9090}
 GRAFANA=${GRAFANA_URL:-http://127.0.0.1:3001}
 end=$(( $(date +%s) + ${MONITORING_TIMEOUT:-180} ))

@@ -7,3 +7,7 @@ __pycache__/
 node_modules/
 .next/
 *.tsbuildinfo
+.deploy/
+backups/
+loadtest/results/
+.env.before-restore.*
