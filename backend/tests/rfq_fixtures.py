@@ -13,9 +13,9 @@ SUPPLIERS = [
 ]
 
 
-def line(item, unit_price=None, total=None, qty=None, unit="pcs", lead=None, match="confirmed", confidence=1.0):
+def line(item, unit_price=None, total=None, qty=None, unit="pcs", lead=None, match="confirmed", confidence=1.0, moq=None):
     return {"rfq_item_id": item, "match_status": match, "unit_price": unit_price, "total_price": total,
-            "quantity": qty, "unit": unit, "lead_time_days": lead, "confidence": confidence, "description": item}
+            "quantity": qty, "unit": unit, "lead_time_days": lead, "confidence": confidence, "description": item, "moq": moq}
 
 
 def quote(sid, lines, status="verified", currency="EUR", incoterms="DAP", payment="Net 30", valid="2026-12-31"):

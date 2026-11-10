@@ -38,6 +38,18 @@ def test_approval_hash_covers_content_and_recipients():
     assert h != content.approval_hash(changed, ["a", "b"])
 
 
+def test_requested_terms_are_optional_and_hashed():
+    base = dict(number="R", title="T", version=1, currency="EUR", response_due_date=None, message=None, organization="O",
+                category=None, items=[])
+    plain = content.build_document(**base)
+    assert "requested_terms" not in plain  # documents approved before Sprint 5 keep their approval hash
+    with_terms = content.build_document(**base, required_by="2026-12-08", incoterms="DAP")
+    assert with_terms["requested_terms"] == {"required_by": "2026-12-08", "incoterms": "DAP"}
+    assert content.approval_hash(plain, []) != content.approval_hash(with_terms, [])
+    text = pdf_text(render.render_rfq_pdf(with_terms, status="approved", content_hash="a" * 64))
+    assert "Delivery required by" in text and "DAP" in text
+
+
 def test_parameter_text_never_invents_values():
     assert content.parameter_text({"name": "grade_class", "unknown": True}) == "grade class: not specified – please state"
     assert content.parameter_text({"name": "thickness", "value": 3, "unit": "mm", "qualifier": "min"}) == "thickness: ≥ 3 mm"
@@ -80,6 +92,40 @@ def test_comparison_pdf():
     for expected in ("Supplier comparison", "Ranking", "Northwind Metals", "Kessler GmbH", "How each score was reached",
                      "decision support only", "Awarded to Northwind Metals", "Incoterms differ"):
         assert expected in text, expected
+
+
+def test_comparison_pdf_shows_risk_deviations_lead_time_and_moq():
+    inputs = base_inputs()
+    inputs["required_by"] = "2026-12-08"
+    inputs["quotes"][2]["lines"][0]["moq"] = 10000
+    text = pdf_text(render.render_comparison_pdf(cmp.compare(inputs), rfq_number="RFQ-9", rfq_title="Brackets",
+                                                 organization="Org", generated_at="2026-11-10 09:00", award=None))
+    for expected in ("Risk and deviations", "Lead time and minimum order quantities", "Required by 2026-12-08",
+                     "not currently qualified", "minimum order", "Risk points"):
+        assert expected in text, expected
+
+
+def test_exports_still_render_stored_version_1_results():
+    """Comparisons stored before the analysis engine (no risk, deviations or lead-time keys) still export."""
+    result = cmp.compare(base_inputs())
+    for r in result["ranking"]:
+        for key in ("risk", "deviations", "on_time", "slack_days", "moq_excess_total"):
+            r.pop(key)
+    for key in ("lead_time_analysis", "moq_analysis", "fx_used", "engine_version"):
+        result.pop(key)
+    assert "Ranking" in pdf_text(render.render_comparison_pdf(result, rfq_number="R", rfq_title="T", organization="O",
+                                                              generated_at="now", award=None))
+    wb = load_workbook(io.BytesIO(xlsx.comparison_workbook(result, rfq_number="R", rfq_title="T", generated_at="now")))
+    assert wb["Deviations"].max_row == 1 and wb["About"]["B8"].value == "1"
+
+
+def test_comparison_workbook_has_deviation_sheet():
+    wb = load_workbook(io.BytesIO(xlsx.comparison_workbook(cmp.compare(base_inputs()), rfq_number="R", rfq_title="T",
+                                                           generated_at="now")))
+    assert wb.sheetnames == ["Ranking", "Line prices", "Not scored", "Deviations", "Explanation", "About"]
+    codes = {row[3] for row in wb["Deviations"].iter_rows(min_row=2, values_only=True)}
+    assert {"supplier_not_qualified", "line_not_quoted"} <= codes
+    assert wb["Ranking"].cell(row=1, column=15).value == "Risk points"
 
 
 # --- Email package ------------------------------------------------------------------------------------------
@@ -158,7 +204,7 @@ def test_comparison_workbook_and_formula_injection():
     result = cmp.compare(inputs)
     data = xlsx.comparison_workbook(result, rfq_number="RFQ-9", rfq_title="Brackets", generated_at="2026-11-10")
     wb = load_workbook(io.BytesIO(data))
-    assert wb.sheetnames == ["Ranking", "Line prices", "Not scored", "Explanation", "About"]
+    assert wb.sheetnames == ["Ranking", "Line prices", "Not scored", "Deviations", "Explanation", "About"]
     names = [c.value for c in wb["Ranking"]["B"][1:]]
     assert any(n.startswith("'=HYPERLINK") for n in names)
     assert all(c.data_type != "f" for row in wb["Ranking"].iter_rows() for c in row)

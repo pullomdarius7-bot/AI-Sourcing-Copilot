@@ -1,4 +1,4 @@
-"""RFQ lifecycle: generation from approved requirements, approval, supplier packages, quotes, comparison, award."""
+"""RFQ lifecycle: generation from approved requirements, approval, supplier packages, quotes, analysis, award approval."""
 import hashlib
 import re
 import uuid
@@ -10,12 +10,16 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis import ingest
+from app.analysis import service as analysis_svc
 from app.config import get_settings
 from app.deps import Principal
 from app.errors import ApiError, bad_request, conflict, forbidden, not_found
 from app.events import emit_event, next_number
+from app.files.scan import ScanUnavailable, scan
 from app.jobs import queue
 from app.models import (
+    AwardRecommendation,
     Comparison,
     Document,
     DocumentExtraction,
@@ -148,7 +152,8 @@ async def create_rfq(db: AsyncSession, p: Principal, body: rs.RfqCreate) -> Rfq:
         organization_id=p.org_id, number=f"{settings.rfq_number_prefix}-{year}-{number:04d}", title=body.title.strip(),
         source_run_id=body.from_run_id, category_id=body.category_id,
         currency=(body.currency or settings.default_currency).upper(), response_due_date=body.response_due_date,
-        message=body.message, created_by=p.user.id,
+        message=body.message, created_by=p.user.id, required_by=body.required_by,
+        requested_incoterms=body.requested_incoterms, requested_payment_terms=body.requested_payment_terms,
     )
     db.add(rfq)
     await db.flush()
@@ -169,9 +174,11 @@ async def update_rfq(db: AsyncSession, p: Principal, rfq: Rfq, body: rs.RfqUpdat
     for key, value in data.items():
         if key in ("title", "currency") and value is None:
             continue
+        if isinstance(value, str):
+            value = value.strip() or None
         if getattr(rfq, key) != value:
             changes[key] = {"from": str(getattr(rfq, key)), "to": str(value)}
-            setattr(rfq, key, value.strip() if key == "title" else value)
+            setattr(rfq, key, value)
     if changes:
         rfq.updated_at = utcnow()
         event(db, p, rfq, "updated", data=changes)
@@ -323,6 +330,8 @@ async def document_for(db: AsyncSession, rfq: Rfq) -> dict[str, Any]:
         organization=await organization_name(db, rfq.organization_id), category=category,
         items=[{"position": i.position, "statement": i.statement, "category": i.category, "priority": i.priority,
                 "quantity": i.quantity, "unit": i.unit, "parameters": i.parameters} for i in await items_of(db, rfq)],
+        required_by=rfq.required_by.isoformat() if rfq.required_by else None, incoterms=rfq.requested_incoterms,
+        payment_terms=rfq.requested_payment_terms,
     )
 
 
@@ -518,6 +527,9 @@ async def cancel(db: AsyncSession, p: Principal, rfq: Rfq, reason: str) -> Rfq:
     rfq.status, rfq.decision_note, rfq.updated_at = "cancelled", reason, utcnow()
     for pkg in await db.scalars(select(RfqPackage).where(RfqPackage.rfq_id == rfq.id, RfqPackage.send_status == "queued")):
         pkg.send_status, pkg.send_error = "failed", "RFQ cancelled before sending"
+    for rec in await db.scalars(select(AwardRecommendation).where(AwardRecommendation.rfq_id == rfq.id,
+                                                                  AwardRecommendation.status == "pending")):
+        _decide(db, p, rec, "withdrawn", "RFQ cancelled")
     event(db, p, rfq, "cancelled", from_state=from_state, to_state="cancelled", note=reason)
     await db.commit()
     return rfq
@@ -550,7 +562,10 @@ async def _write_lines(db: AsyncSession, rfq: Rfq, quote: RfqQuote, lines: list[
     for ln in lines:
         if ln.get("rfq_item_id") and ln["rfq_item_id"] not in item_ids:
             raise bad_request("invalid_item", "A line refers to a requirement that is not on this RFQ")
-    unmatched = [n for n, ln in enumerate(lines) if not ln.get("rfq_item_id")]
+    # a line reference from an imported sheet is only ever a suggestion a person confirms
+    referenced = {n: ln["suggested_item_id"] for n, ln in enumerate(lines)
+                  if not ln.get("rfq_item_id") and ln.get("suggested_item_id") in item_ids}
+    unmatched = [n for n, ln in enumerate(lines) if not ln.get("rfq_item_id") and n not in referenced]
     suggestions = matching.suggest(
         [{"description": lines[n]["description"]} for n in unmatched],
         [{"id": i.id, "statement": i.statement, "parameters": i.parameters} for i in items
@@ -560,13 +575,15 @@ async def _write_lines(db: AsyncSession, rfq: Rfq, quote: RfqQuote, lines: list[
     await db.execute(delete(RfqQuoteLine).where(RfqQuoteLine.quote_id == quote.id))
     for n, ln in enumerate(lines):
         item_id, status, score = ln.get("rfq_item_id"), "confirmed" if ln.get("rfq_item_id") else "unmatched", 1.0 if ln.get("rfq_item_id") else 0.0
-        if n in suggested and suggested[n][0] is not None:
+        if n in referenced:
+            item_id, status, score = referenced[n], "suggested", 1.0
+        elif n in suggested and suggested[n][0] is not None:
             item_id, status, score = suggested[n][0], "suggested", suggested[n][1]
         db.add(RfqQuoteLine(
             organization_id=quote.organization_id, quote_id=quote.id, position=n, rfq_item_id=item_id, match_status=status,
             match_score=score, description=ln["description"].strip(), quantity=ln.get("quantity"), unit=ln.get("unit"),
             unit_price=ln.get("unit_price"), total_price=ln.get("total_price"), lead_time_days=ln.get("lead_time_days"),
-            confidence=ln.get("confidence", 1.0), source_quote=ln.get("source_quote"),
+            moq=ln.get("moq"), confidence=ln.get("confidence", 1.0), source_quote=ln.get("source_quote"),
         ))
 
 
@@ -652,6 +669,48 @@ async def quote_from_document(db: AsyncSession, p: Principal, rfq: Rfq, body: rs
                             extraction_id=extraction.id)
 
 
+async def import_quote(db: AsyncSession, p: Principal, rfq: Rfq, supplier_id: uuid.UUID, filename: str, data: bytes,
+                       header: dict[str, Any]) -> tuple[RfqQuote, ingest.Ingested]:
+    """Create a draft quote from a supplier's CSV/XLSX price sheet. Parsing is deterministic; a person verifies it."""
+    if not data:
+        raise bad_request("empty_file", "The file is empty")
+    if len(data) > settings.quote_import_max_mb * 1024 * 1024:
+        raise ApiError(413, "file_too_large", f"Quote sheets are limited to {settings.quote_import_max_mb} MB")
+    content_type = "text/csv" if filename.lower().endswith((".csv", ".txt")) else \
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    try:
+        verdict = await scan(data, content_type)
+    except ScanUnavailable:
+        raise ApiError(503, "scanner_unavailable", "The malware scanner is unavailable; try again shortly") from None
+    if not verdict.clean:
+        raise ApiError(422, "file_rejected", f"The file was rejected by the malware scanner ({verdict.signature})")
+    try:
+        parsed = ingest.parse(filename, data)
+    except ingest.IngestError as exc:
+        raise ApiError(422, "unreadable_sheet", str(exc)) from None
+    items = await items_of(db, rfq)
+    by_line = {n: i.id for n, i in enumerate(items, start=1)}
+    lines = []
+    for ln in parsed.lines:
+        lines.append({
+            "description": ln["description"], "quantity": _float(ln["quantity"]), "unit": ln["unit"],
+            "unit_price": _float(ln["unit_price"]), "total_price": _float(ln["total_price"]),
+            "lead_time_days": _float(ln["lead_time_days"]), "moq": _float(ln["moq"]) if ln["moq"] else None,
+            "confidence": 1.0, "source_quote": f"{filename}, row {ln['row']}", "rfq_item_id": None,
+            "suggested_item_id": by_line.get(ln["line_ref"]) if ln["line_ref"] else None,
+        })
+    head = {k: v for k, v in header.items() if v is not None}
+    head.setdefault("currency", parsed.currency)
+    notes = [f"Imported from {filename}: {len(lines)} line(s), {parsed.rows_skipped} row(s) skipped."] + parsed.warnings
+    head["notes"] = "\n".join(notes)[:4000]
+    quote = await _new_quote(db, p, rfq, supplier_id, head, lines, source="import")
+    return quote, parsed
+
+
+def _float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
 async def update_quote(db: AsyncSession, p: Principal, quote_id: uuid.UUID, body: rs.QuoteHeader) -> RfqQuote:
     quote, rfq = await _quote(db, p, quote_id, lock=True)
     _require_quote_draft(quote, rfq)
@@ -731,9 +790,16 @@ async def comparison_inputs(db: AsyncSession, rfq: Rfq) -> dict[str, Any]:
     if quotes:
         for ln in await db.scalars(select(RfqQuoteLine).where(RfqQuoteLine.quote_id.in_(lines)).order_by(RfqQuoteLine.position)):
             lines[ln.quote_id].append(ln)
+    rates = await analysis_svc.list_rates(db, rfq.organization_id)
+    rules = await analysis_svc.list_conversions(db, rfq.organization_id)
     return {
         "currency": rfq.currency,
         "as_of": utcnow().date().isoformat(),
+        "required_by": rfq.required_by.isoformat() if rfq.required_by else None,
+        "requested_incoterms": rfq.requested_incoterms,
+        "requested_payment_terms": rfq.requested_payment_terms,
+        "fx_rates": analysis_svc.rates_as_inputs(rates),
+        "unit_conversions": analysis_svc.conversions_as_inputs(rules),
         "items": [{"id": str(i.id), "position": i.position, "statement": i.statement, "quantity": i.quantity,
                    "unit": i.unit, "priority": i.priority} for i in items],
         "suppliers": [{"id": str(s.id), "name": s.name, "code": s.code, "qualified": states[s.id].summary(s).qualified}
@@ -744,10 +810,16 @@ async def comparison_inputs(db: AsyncSession, rfq: Rfq) -> dict[str, Any]:
             "valid_until": q.valid_until.isoformat() if q.valid_until else None,
             "lines": [{"rfq_item_id": str(ln.rfq_item_id) if ln.rfq_item_id else None, "match_status": ln.match_status,
                        "description": ln.description, "quantity": ln.quantity, "unit": ln.unit, "unit_price": ln.unit_price,
-                       "total_price": ln.total_price, "lead_time_days": ln.lead_time_days, "confidence": ln.confidence}
+                       "total_price": ln.total_price, "lead_time_days": ln.lead_time_days, "moq": ln.moq,
+                       "confidence": ln.confidence}
                       for ln in lines[q.id]],
         } for q in quotes],
     }
+
+
+def analysis_params() -> dict[str, Any]:
+    return {"outlier_ratio": settings.comparison_outlier_ratio, "fx_max_age_days": settings.fx_max_age_days,
+            "validity_warning_days": settings.quote_validity_warning_days}
 
 
 async def run_comparison(db: AsyncSession, p: Principal, rfq: Rfq, weights: dict[str, float] | None) -> Comparison:
@@ -755,11 +827,11 @@ async def run_comparison(db: AsyncSession, p: Principal, rfq: Rfq, weights: dict
         raise conflict("invalid_state", "Quotes can only be compared once the RFQ has been sent")
     inputs = await comparison_inputs(db, rfq)
     try:
-        result = cmp.compare(inputs, weights, settings.comparison_outlier_ratio)
+        result = cmp.compare(inputs, weights, **analysis_params())
     except cmp.ComparisonError as exc:
         raise ApiError(422, "invalid_weights", str(exc)) from None
     row = Comparison(organization_id=rfq.organization_id, rfq_id=rfq.id, created_by=p.user.id,
-                     params={"weights": result["weights"], "outlier_ratio": settings.comparison_outlier_ratio},
+                     params={"weights": result["weights"], "engine_version": result["engine_version"], **analysis_params()},
                      inputs_sha256=result["inputs_sha256"], result=result)
     db.add(row)
     await db.flush()
@@ -776,28 +848,122 @@ async def is_stale(db: AsyncSession, rfq: Rfq, row: Comparison) -> bool:
     return cmp.inputs_hash(current) != row.inputs_sha256
 
 
-async def award(db: AsyncSession, p: Principal, rfq: Rfq, body: rs.AwardIn) -> Rfq:
+# --- Award recommendation & approval -------------------------------------------------------------------------------
+async def _recommendation(db: AsyncSession, p: Principal, rec_id: uuid.UUID, *, lock: bool = False) -> tuple[AwardRecommendation, Rfq]:
+    stmt = select(AwardRecommendation).where(AwardRecommendation.id == rec_id, AwardRecommendation.organization_id == p.org_id)
+    rec = await db.scalar(stmt.with_for_update() if lock else stmt)
+    if rec is None:
+        raise not_found("Recommendation not found")
+    rfq = await db.scalar(select(Rfq).where(Rfq.id == rec.rfq_id).with_for_update() if lock else select(Rfq).where(Rfq.id == rec.rfq_id))
+    assert rfq is not None
+    return rec, rfq
+
+
+async def list_recommendations(db: AsyncSession, rfq: Rfq) -> list[AwardRecommendation]:
+    return list(await db.scalars(select(AwardRecommendation).where(AwardRecommendation.rfq_id == rfq.id)
+                                 .order_by(AwardRecommendation.submitted_at.desc())))
+
+
+async def recommend(db: AsyncSession, p: Principal, rfq: Rfq, body: rs.RecommendationIn) -> AwardRecommendation:
+    """A buyer proposes the award. Nothing is awarded until a different person approves it."""
     if rfq.status not in ("sent", "closed"):
-        raise conflict("invalid_state", "Only sent or closed RFQs can be awarded")
-    if settings.require_separate_approver and p.user.id == rfq.created_by:
-        raise forbidden("The person who created the RFQ cannot also award it", "segregation_of_duties")
+        raise conflict("invalid_state", "Only sent or closed RFQs can receive an award recommendation")
     row = await db.scalar(select(Comparison).where(Comparison.id == body.comparison_id, Comparison.rfq_id == rfq.id))
     if row is None:
         raise not_found("Comparison not found")
     if await is_stale(db, rfq, row):
-        raise conflict("stale_comparison", "Quotes changed after this comparison. Run the comparison again first.")
+        raise conflict("stale_comparison", "Quotes, exchange rates or unit rules changed after this comparison. Run it again first.")
     entry = next((r for r in row.result["ranking"] if r["supplier_id"] == str(body.supplier_id)), None)
     if entry is None:
-        raise conflict("not_ranked", "Only a supplier with a verified, comparable quote in the comparison can be awarded")
-    supplier = await db.scalar(select(Supplier).where(Supplier.id == body.supplier_id))
+        raise conflict("not_ranked", "Only a supplier with a verified, comparable quote in the comparison can be recommended")
+    deviates = row.result["highest_score_supplier_id"] != str(body.supplier_id)
+    snapshot = {
+        "rank": entry["rank"], "score": entry["score"], "basket_total": entry["basket_total"], "currency": row.result["currency"],
+        "lead_time_days": entry["lead_time_days"], "risk": {"score": entry["risk"]["score"], "level": entry["risk"]["level"]},
+        "deviations": [d for d in entry["deviations"] if d["severity"] in ("critical", "major")],
+        "qualified": entry["qualified"], "not_top_ranked": deviates, "weights": row.result["weights"],
+        "inputs_sha256": row.inputs_sha256, "engine_version": row.result.get("engine_version"),
+    }
+    rec = AwardRecommendation(organization_id=rfq.organization_id, rfq_id=rfq.id, comparison_id=row.id,
+                              supplier_id=body.supplier_id, rationale=body.rationale.strip(), snapshot=snapshot,
+                              submitted_by=p.user.id)
+    try:
+        async with db.begin_nested():
+            db.add(rec)
+            await db.flush()
+    except IntegrityError:
+        raise conflict("recommendation_pending", "A recommendation is already waiting for approval; withdraw it first") from None
+    emit_event(db, org_id=rfq.organization_id, entity_type="recommendation", entity_id=rec.id, action="submitted",
+               actor=p.user.id, to_state="pending", note=body.rationale, ip=p.ip,
+               data={"rfq_id": str(rfq.id), "supplier_id": str(body.supplier_id), "rank": entry["rank"], "not_top_ranked": deviates})
+    event(db, p, rfq, "award_recommended", note=body.rationale,
+          data={"recommendation_id": str(rec.id), "supplier_id": str(body.supplier_id), "comparison_id": str(row.id),
+                "rank": entry["rank"], "score": entry["score"], "not_top_ranked": deviates})
+    await db.refresh(rec)
+    await db.commit()
+    return rec
+
+
+def _decide(db: AsyncSession, p: Principal, rec: AwardRecommendation, status: str, note: str | None) -> None:
+    rec.status, rec.decided_by, rec.decided_at, rec.decision_note = status, p.user.id, utcnow(), note
+    emit_event(db, org_id=rec.organization_id, entity_type="recommendation", entity_id=rec.id, action=status,
+               actor=p.user.id, from_state="pending", to_state=status, note=note, ip=p.ip)
+
+
+async def approve_recommendation(db: AsyncSession, p: Principal, rec_id: uuid.UUID, note: str | None) -> AwardRecommendation:
+    rec, rfq = await _recommendation(db, p, rec_id, lock=True)
+    if rec.status != "pending":
+        raise conflict("invalid_state", f"This recommendation is already {rec.status}")
+    if rec.submitted_by == p.user.id:
+        raise forbidden("The person who recommended the award cannot also approve it", "segregation_of_duties")
+    if settings.require_separate_approver and p.user.id == rfq.created_by:
+        raise forbidden("The person who created the RFQ cannot also approve its award", "segregation_of_duties")
+    if rfq.status not in ("sent", "closed"):
+        raise conflict("invalid_state", f"The RFQ is {rfq.status} and can no longer be awarded")
+    row = await db.scalar(select(Comparison).where(Comparison.id == rec.comparison_id))
+    assert row is not None
+    if await is_stale(db, rfq, row):
+        raise conflict("stale_comparison", "The data behind this recommendation changed. Reject it and recommend again on a new comparison.")
+    supplier = await db.scalar(select(Supplier).where(Supplier.id == rec.supplier_id))
     if supplier is None or not await supplier_svc.is_qualified(db, supplier):
         raise conflict("supplier_not_qualified", "The supplier must be qualified at the time of award")
-    deviates = row.result["highest_score_supplier_id"] != str(body.supplier_id)
+    if rec.snapshot.get("not_top_ranked") and not (note and note.strip()):
+        raise bad_request("note_required", "The recommended supplier is not the highest scored; record why you approve it")
+    _decide(db, p, rec, "approved", note.strip() if note else None)
     from_state = rfq.status
-    rfq.status, rfq.awarded_supplier_id, rfq.award_comparison_id = "awarded", body.supplier_id, row.id
-    rfq.awarded_by, rfq.awarded_at, rfq.award_note, rfq.updated_at = p.user.id, utcnow(), body.note.strip(), utcnow()
-    event(db, p, rfq, "awarded", from_state=from_state, to_state="awarded", note=body.note,
-          data={"supplier_id": str(body.supplier_id), "comparison_id": str(row.id), "rank": entry["rank"],
-                "score": entry["score"], "deviates_from_ranking": deviates})
+    award_note = rec.rationale + (f"\n\nApproval: {note.strip()}" if note and note.strip() else "")
+    rfq.status, rfq.awarded_supplier_id, rfq.award_comparison_id, rfq.award_recommendation_id = \
+        "awarded", rec.supplier_id, rec.comparison_id, rec.id
+    rfq.awarded_by, rfq.awarded_at, rfq.award_note, rfq.updated_at = p.user.id, utcnow(), award_note, utcnow()
+    event(db, p, rfq, "awarded", from_state=from_state, to_state="awarded", note=award_note,
+          data={"supplier_id": str(rec.supplier_id), "comparison_id": str(rec.comparison_id), "recommendation_id": str(rec.id),
+                "recommended_by": str(rec.submitted_by), "rank": rec.snapshot.get("rank"),
+                "score": rec.snapshot.get("score"), "deviates_from_ranking": bool(rec.snapshot.get("not_top_ranked"))})
     await db.commit()
-    return rfq
+    return rec
+
+
+async def reject_recommendation(db: AsyncSession, p: Principal, rec_id: uuid.UUID, note: str | None) -> AwardRecommendation:
+    rec, rfq = await _recommendation(db, p, rec_id, lock=True)
+    if rec.status != "pending":
+        raise conflict("invalid_state", f"This recommendation is already {rec.status}")
+    if not note or len(note.strip()) < 5:
+        raise bad_request("note_required", "Say why the recommendation is rejected")
+    if rec.submitted_by == p.user.id:
+        raise forbidden("Withdraw your own recommendation instead of rejecting it", "segregation_of_duties")
+    _decide(db, p, rec, "rejected", note.strip())
+    event(db, p, rfq, "award_recommendation_rejected", note=note, data={"recommendation_id": str(rec.id)})
+    await db.commit()
+    return rec
+
+
+async def withdraw_recommendation(db: AsyncSession, p: Principal, rec_id: uuid.UUID, note: str | None) -> AwardRecommendation:
+    rec, rfq = await _recommendation(db, p, rec_id, lock=True)
+    if rec.status != "pending":
+        raise conflict("invalid_state", f"This recommendation is already {rec.status}")
+    if rec.submitted_by != p.user.id and p.user.role != "admin":
+        raise forbidden("Only the person who made the recommendation can withdraw it", "not_owner")
+    _decide(db, p, rec, "withdrawn", note.strip() if note else None)
+    event(db, p, rfq, "award_recommendation_withdrawn", note=note, data={"recommendation_id": str(rec.id)})
+    await db.commit()
+    return rec

@@ -8,6 +8,7 @@ Category = Literal["material", "dimensions", "tolerance", "quantity", "delivery"
                    "commercial", "packaging", "other"]
 Priority = Literal["mandatory", "preferred", "optional", "unknown"]
 CURRENCY = r"^[A-Za-z]{3}$"
+INCOTERMS = r"^[A-Za-z]{3}$"
 
 
 def _upper(value: str | None) -> str | None:
@@ -34,8 +35,11 @@ class RfqCreate(BaseModel):
     response_due_date: date | None = None
     message: str | None = Field(default=None, max_length=5000)
     category_id: uuid.UUID | None = None
+    required_by: date | None = None
+    requested_incoterms: str | None = Field(default=None, pattern=INCOTERMS)
+    requested_payment_terms: str | None = Field(default=None, max_length=200)
 
-    _c = field_validator("currency")(_upper)
+    _c = field_validator("currency", "requested_incoterms")(_upper)
 
 
 class RfqUpdate(BaseModel):
@@ -44,8 +48,11 @@ class RfqUpdate(BaseModel):
     response_due_date: date | None = None
     message: str | None = Field(default=None, max_length=5000)
     category_id: uuid.UUID | None = None
+    required_by: date | None = None
+    requested_incoterms: str | None = Field(default=None, pattern=INCOTERMS)
+    requested_payment_terms: str | None = Field(default=None, max_length=200)
 
-    _c = field_validator("currency")(_upper)
+    _c = field_validator("currency", "requested_incoterms")(_upper)
 
 
 class ItemIn(BaseModel):
@@ -141,6 +148,10 @@ class RfqOut(BaseModel):
     awarded_by: uuid.UUID | None
     awarded_at: datetime | None
     award_note: str | None
+    award_recommendation_id: uuid.UUID | None = None
+    required_by: date | None = None
+    requested_incoterms: str | None = None
+    requested_payment_terms: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[ItemOut]
@@ -179,6 +190,7 @@ class QuoteLineIn(BaseModel):
     unit_price: float | None = Field(default=None, ge=0)
     total_price: float | None = Field(default=None, ge=0)
     lead_time_days: float | None = Field(default=None, ge=0, le=3650)
+    moq: float | None = Field(default=None, gt=0)
     rfq_item_id: uuid.UUID | None = None
 
 
@@ -222,6 +234,7 @@ class QuoteLineOut(BaseModel):
     unit_price: float | None
     total_price: float | None
     lead_time_days: float | None
+    moq: float | None = None
     confidence: float
     source_quote: str | None
 
@@ -267,7 +280,40 @@ class ComparisonBrief(BaseModel):
     stale: bool
 
 
-class AwardIn(BaseModel):
-    supplier_id: uuid.UUID
+class RecommendationIn(BaseModel):
     comparison_id: uuid.UUID
-    note: str = Field(min_length=10, max_length=4000)
+    supplier_id: uuid.UUID
+    rationale: str = Field(min_length=10, max_length=4000)
+
+
+class DecisionIn(BaseModel):
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class RecommendationOut(BaseModel):
+    id: uuid.UUID
+    rfq_id: uuid.UUID
+    comparison_id: uuid.UUID
+    supplier_id: uuid.UUID
+    supplier_name: str
+    rationale: str
+    status: str
+    snapshot: dict[str, Any]
+    submitted_by: uuid.UUID | None
+    submitted_by_email: str | None
+    submitted_at: datetime
+    decided_by: uuid.UUID | None
+    decided_by_email: str | None
+    decided_at: datetime | None
+    decision_note: str | None
+    comparison_stale: bool
+    not_top_ranked: bool
+
+
+class ImportOut(BaseModel):
+    quote: "QuoteOut"
+    warnings: list[str]
+    rows_read: int
+    rows_skipped: int
+    columns: dict[str, str]
+    currency_detected: str | None

@@ -452,6 +452,10 @@ export interface Rfq {
   award_comparison_id: string | null;
   awarded_at: string | null;
   award_note: string | null;
+  award_recommendation_id?: string | null;
+  required_by?: string | null;
+  requested_incoterms?: string | null;
+  requested_payment_terms?: string | null;
   created_at: string;
   items: RfqItem[];
   suppliers: RfqSupplierLink[];
@@ -485,6 +489,7 @@ export interface QuoteLine {
   unit_price: number | null;
   total_price: number | null;
   lead_time_days: number | null;
+  moq?: number | null;
   confidence: number;
   source_quote: string | null;
 }
@@ -494,7 +499,7 @@ export interface Quote {
   supplier_id: string;
   supplier_name: string;
   document_id: string | null;
-  source: "analysis" | "manual";
+  source: "analysis" | "manual" | "import";
   status: "draft" | "verified";
   currency: string | null;
   incoterms: string | null;
@@ -516,7 +521,7 @@ export interface RankingRow {
   supplier_name: string;
   supplier_code: string;
   score: number;
-  criteria: { price: CriterionScore; lead_time: CriterionScore; coverage: CriterionScore; qualification: CriterionScore };
+  criteria: { price: CriterionScore; lead_time: CriterionScore; coverage: CriterionScore; qualification: CriterionScore; risk?: CriterionScore };
   basket_total: number | null;
   lead_time_days: number | null;
   coverage: number;
@@ -526,6 +531,29 @@ export interface RankingRow {
   valid_until: string | null;
   flags: string[];
   explanation: string[];
+  // engine 2.0 and later; older stored comparisons do not have these
+  currency?: string;
+  risk?: Risk;
+  deviations?: Deviation[];
+  on_time?: boolean | null;
+  slack_days?: number | null;
+  moq_excess_total?: number | null;
+}
+
+export type Severity = "critical" | "major" | "minor" | "info";
+
+export interface Deviation {
+  code: string;
+  severity: Severity;
+  line: number | null;
+  message: string;
+}
+
+export interface Risk {
+  score: number;
+  level: "low" | "medium" | "high";
+  counts: Record<Severity, number>;
+  factors: string[];
 }
 
 export interface ComparisonCell {
@@ -533,6 +561,12 @@ export interface ComparisonCell {
   comparable_total: number | null;
   lead_time_days: number | null;
   flags: string[];
+  requested_total?: number | null;
+  moq?: number | null;
+  moq_excess?: number | null;
+  payable_quantity?: number | null;
+  conversions?: string[];
+  fx?: string | null;
 }
 
 export interface ComparisonResult {
@@ -547,6 +581,17 @@ export interface ComparisonResult {
   global_flags: string[];
   highest_score_supplier_id: string | null;
   decision_note: string;
+  engine_version?: string;
+  lead_time_analysis?: {
+    required_by: string | null;
+    available_days: number | null;
+    fastest: number | null;
+    median: number | null;
+    slowest: number | null;
+    late_suppliers: string[];
+  };
+  moq_analysis?: { suppliers_with_excess: { supplier_name: string; excess: number }[] };
+  fx_used?: Record<string, { rate: number; valid_from: string; path: string; age_days: number }>;
 }
 
 export interface ComparisonRecord {
@@ -564,4 +609,68 @@ export interface ComparisonBrief {
   weights: Record<string, number>;
   highest_score_supplier_id: string | null;
   stale: boolean;
+}
+
+export interface Recommendation {
+  id: string;
+  rfq_id: string;
+  comparison_id: string;
+  supplier_id: string;
+  supplier_name: string;
+  rationale: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn";
+  snapshot: {
+    rank?: number;
+    score?: number;
+    basket_total?: number | null;
+    currency?: string;
+    lead_time_days?: number | null;
+    risk?: { score: number; level: string };
+    deviations?: Deviation[];
+    not_top_ranked?: boolean;
+  };
+  submitted_by: string | null;
+  submitted_by_email: string | null;
+  submitted_at: string;
+  decided_by: string | null;
+  decided_by_email: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  comparison_stale: boolean;
+  not_top_ranked: boolean;
+}
+
+export interface FxRate {
+  id: string;
+  base: string;
+  quote: string;
+  rate: string;
+  valid_from: string;
+  source: string | null;
+  created_at: string;
+}
+
+export interface UnitRule {
+  id: string;
+  from_unit: string;
+  to_unit: string;
+  factor: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface UnitInfo {
+  unit: string;
+  dimension: string;
+  to_base: string;
+  aliases: string[];
+}
+
+export interface QuoteImportResult {
+  quote: Quote;
+  warnings: string[];
+  rows_read: number;
+  rows_skipped: number;
+  columns: Record<string, string>;
+  currency_detected: string | null;
 }

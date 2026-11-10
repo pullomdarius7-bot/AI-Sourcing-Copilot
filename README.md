@@ -157,3 +157,63 @@ approve RFQs, run comparisons and award; admins can do everything; auditors read
 
 Assumptions: one quote per supplier per RFQ (revisions edit it, with history); no FX or unit conversion is ever
 assumed; RFQ due dates are calendar dates; the sender address is EMAIL_FROM for all organizations on one deployment.
+
+## Sprint 5: quote analysis and award approval
+
+No new services and no new dependencies. Run `make migrate` (or restart the stack) to apply migration `0005`. All
+analysis is plain arithmetic in `backend/app/analysis/` using exact decimals; no AI model takes part in any
+calculation. Formulas, deviation codes and risk points are in [docs/ANALYSIS.md](docs/ANALYSIS.md).
+
+**Quote ingestion.** Besides manual entry and analysed documents, a supplier's price sheet (CSV or XLSX, up to
+`QUOTE_IMPORT_MAX_MB`) can be imported as a draft quote. Columns are recognised by header name (Description,
+Quantity, Unit, Unit price, Total, Lead time, MOQ, Currency, RFQ line; common German headers too). Numbers are read
+exactly: the file's decimal separator is worked out from its own unambiguous numbers, and a value such as `1.000`
+that could mean one or a thousand is left empty with a warning rather than guessed. An "RFQ line" number only becomes a
+suggested match. Files are malware-scanned first. The quote stays a draft until a person confirms the matches and
+verifies it.
+
+**Normalization.** For each RFQ line and supplier the engine converts the quoted unit to the requested unit (exact
+standard factors for count, mass, length, area and volume; anything across dimensions, such as box -> pcs or pcs -> kg,
+only with a rule recorded under *Rates & units*), derives a unit price from a total only when the quoted quantity is
+stated, and converts the currency with the organization's latest recorded rate valid on the analysis date (direct or
+inverted, never through a third currency). A quote whose currency has no rate is listed as not scored.
+
+**Price, lead time and MOQ analysis.** The payable quantity is the larger of the requested quantity and the MOQ, so a
+supplier whose MOQ forces a larger order is compared on what would actually be paid, and the extra cost is shown.
+Price is compared on the basket of lines every scored supplier priced. Lead time is the longest priced line, compared
+with the fastest supplier and, when the RFQ has a *delivery required by* date, with the days available.
+
+**Deviation detection and risk.** Each quote is checked against the request: lines not quoted (by priority), units or
+currencies that cannot be converted, quantity differences, MOQ above quantity, missing prices, arithmetic mismatches,
+low-confidence values, abnormally low prices, Incoterms or payment terms differing from what the RFQ requested,
+expired or expiring quotes, missing validity, late delivery and unqualified suppliers. Every deviation has a severity;
+risk is the sum of points (critical 25, major 10, minor 3, capped at 100), and its level and contributing factors are
+shown.
+
+**Scoring.** Weighted sum of price, lead time, coverage, qualification and risk (default 45/20/15/10/10, adjustable per
+run), with an explanation for every criterion. Changing a quote, an exchange rate, a unit rule, a requested term or a
+supplier's qualification makes earlier comparisons outdated.
+
+**Human approval workflow.** The direct award endpoint is replaced by recommendation and approval. A buyer recommends a
+supplier from a current comparison with a rationale; a different person with approval rights (not the recommender,
+not the RFQ creator) approves or rejects it. Approval re-checks that the comparison is still current and the supplier
+still qualified, and needs a written reason when the recommendation is not the top score; only then is the RFQ
+awarded. One recommendation can be pending per RFQ; it can be withdrawn by its author, and cancelling the RFQ withdraws
+it. The database enforces four-eyes approval and a note on every rejection.
+
+**RFQ terms.** RFQs gain *delivery required by*, *Incoterms requested* and *payment terms requested*. When set, they are
+printed on the RFQ PDF and in the supplier email and are part of the approved content. RFQs approved earlier keep their
+approval fingerprint.
+
+**Exports.** The comparison PDF adds lead time and MOQ, and risk and deviations sections; the Excel export adds risk,
+on-time and MOQ columns and a Deviations sheet. Comparisons stored by Sprint 4 still render.
+
+Roles: approvers and admins maintain exchange rates and unit rules (`reference:manage`); everyone who can read
+comparisons can see them. Buyers and approvers can recommend (`comparisons:run`); approvers and admins decide
+(`rfqs:approve`).
+
+Settings: `FX_MAX_AGE_DAYS` (30), `QUOTE_VALIDITY_WARNING_DAYS` (7), `QUOTE_IMPORT_MAX_MB` (5).
+
+Assumptions: exchange rates are entered by people (from treasury or a bank), never fetched; the analysis date is the
+UTC date of the run; lead time for a quote is its slowest priced line; a missing unit on a quoted line is taken as the
+requested unit and flagged; freight and other unmatched lines are listed but not added to prices.

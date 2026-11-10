@@ -8,19 +8,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { api, errorMessage, useFetch } from "@/lib/api";
-import type { DocumentItem, Quote, QuoteLine, Rfq } from "@/lib/types";
+import { api, apiForm, errorMessage, useFetch } from "@/lib/api";
+import type { DocumentItem, Quote, QuoteImportResult, QuoteLine, Rfq } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type LineDraft = { description: string; quantity: string; unit: string; unit_price: string; total_price: string; lead_time_days: string; rfq_item_id: string };
-const EMPTY_LINE: LineDraft = { description: "", quantity: "", unit: "", unit_price: "", total_price: "", lead_time_days: "", rfq_item_id: "" };
+type LineDraft = { description: string; quantity: string; unit: string; unit_price: string; total_price: string; lead_time_days: string; moq: string; rfq_item_id: string };
+const EMPTY_LINE: LineDraft = { description: "", quantity: "", unit: "", unit_price: "", total_price: "", lead_time_days: "", moq: "", rfq_item_id: "" };
 const num = (v: string) => (v.trim() === "" ? null : Number(v));
 const fmt = (v: number | null) => (v == null ? "—" : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
 
 function toBody(lines: LineDraft[]) {
   return lines.filter((l) => l.description.trim()).map((l) => ({
     description: l.description, quantity: num(l.quantity), unit: l.unit || null, unit_price: num(l.unit_price),
-    total_price: num(l.total_price), lead_time_days: num(l.lead_time_days), rfq_item_id: l.rfq_item_id || null,
+    total_price: num(l.total_price), lead_time_days: num(l.lead_time_days), moq: num(l.moq), rfq_item_id: l.rfq_item_id || null,
   }));
 }
 
@@ -29,13 +29,14 @@ function LinesEditor({ rfq, lines, setLines }: { rfq: Rfq; lines: LineDraft[]; s
   return (
     <div className="space-y-2">
       {lines.map((l, i) => (
-        <div key={i} className="grid gap-2 md:grid-cols-[1fr_6rem_5rem_7rem_7rem_6rem_12rem_auto]">
+        <div key={i} className="grid gap-2 md:grid-cols-[1fr_6rem_5rem_7rem_7rem_6rem_6rem_12rem_auto]">
           <Input aria-label="Description" placeholder="Description as quoted" value={l.description} onChange={(e) => update(i, "description", e.target.value)} />
           <Input aria-label="Quantity" type="number" step="any" min={0} placeholder="Qty" value={l.quantity} onChange={(e) => update(i, "quantity", e.target.value)} />
           <Input aria-label="Unit" placeholder="Unit" value={l.unit} onChange={(e) => update(i, "unit", e.target.value)} />
           <Input aria-label="Unit price" type="number" step="any" min={0} placeholder="Unit price" value={l.unit_price} onChange={(e) => update(i, "unit_price", e.target.value)} />
           <Input aria-label="Line total" type="number" step="any" min={0} placeholder="Line total" value={l.total_price} onChange={(e) => update(i, "total_price", e.target.value)} />
           <Input aria-label="Lead time days" type="number" step="any" min={0} placeholder="Days" value={l.lead_time_days} onChange={(e) => update(i, "lead_time_days", e.target.value)} />
+          <Input aria-label="Minimum order quantity" type="number" step="any" min={0} placeholder="MOQ" value={l.moq} onChange={(e) => update(i, "moq", e.target.value)} />
           <Select aria-label="Answers RFQ line" value={l.rfq_item_id} onChange={(e) => update(i, "rfq_item_id", e.target.value)}>
             <option value="">Suggest a match</option>
             {rfq.items.map((it) => <option key={it.id} value={it.id}>Line {it.line}: {it.statement.slice(0, 40)}</option>)}
@@ -50,7 +51,9 @@ function LinesEditor({ rfq, lines, setLines }: { rfq: Rfq; lines: LineDraft[]; s
 
 function NewQuote({ rfq, quotedIds, onCreated }: { rfq: Rfq; quotedIds: Set<string>; onCreated: () => void }) {
   const docs = useFetch<{ items: DocumentItem[] }>("documents?status=processed&limit=100");
-  const [mode, setMode] = useState<"manual" | "document">("manual");
+  const [mode, setMode] = useState<"manual" | "document" | "sheet">("manual");
+  const [file, setFile] = useState<File | null>(null);
+  const [imported, setImported] = useState<QuoteImportResult | null>(null);
   const [supplier, setSupplier] = useState("");
   const [header, setHeader] = useState({ currency: rfq.currency, incoterms: "", payment_terms: "", valid_until: "", notes: "" });
   const [lines, setLines] = useState<LineDraft[]>(rfq.items.map((it) => ({ ...EMPTY_LINE, description: it.statement, rfq_item_id: it.id, quantity: it.quantity?.toString() ?? "", unit: it.unit ?? "" })));
@@ -63,6 +66,18 @@ function NewQuote({ rfq, quotedIds, onCreated }: { rfq: Rfq; quotedIds: Set<stri
     e.preventDefault();
     setError(null);
     try {
+      if (mode === "sheet") {
+        if (!file) return;
+        const form = new FormData();
+        form.append("supplier_id", supplier);
+        form.append("file", file);
+        for (const key of ["currency", "incoterms", "payment_terms", "valid_until"] as const) {
+          if (header[key]) form.append(key, header[key]);
+        }
+        const res = await apiForm<QuoteImportResult>(`rfqs/${rfq.id}/quotes/import`, form);
+        setImported(res);
+        return;
+      }
       if (mode === "document") {
         await api(`rfqs/${rfq.id}/quotes/from-document`, { body: { supplier_id: supplier, document_id: docId } });
       } else {
@@ -80,6 +95,20 @@ function NewQuote({ rfq, quotedIds, onCreated }: { rfq: Rfq; quotedIds: Set<stri
     }
   }
 
+  if (imported) {
+    return (
+      <div className="space-y-2 rounded-md border p-3 text-sm">
+        <p className="font-medium">Imported {imported.quote.lines.length} line(s) for {imported.quote.supplier_name} as a draft.</p>
+        <p className="text-muted-foreground">
+          Read {imported.rows_read} row(s), skipped {imported.rows_skipped}. Columns used: {Object.entries(imported.columns).map(([k, v]) => `${v} → ${k.replace(/_/g, " ")}`).join(", ")}.
+          {imported.currency_detected ? ` Currency found in the sheet: ${imported.currency_detected}.` : " No currency found in the sheet."}
+        </p>
+        {imported.warnings.length > 0 && <ul className="list-disc pl-5 text-caution">{imported.warnings.map((w) => <li key={w}>{w}</li>)}</ul>}
+        <p className="text-muted-foreground">Check every value against the supplier&rsquo;s sheet, confirm the suggested line matches, then verify the quote.</p>
+        <Button size="sm" onClick={onCreated}>Done</Button>
+      </div>
+    );
+  }
   if (candidates.length === 0) return <p className="text-sm text-muted-foreground">Every invited supplier has a quote recorded.</p>;
   return (
     <form onSubmit={submit} className="space-y-3 rounded-md border p-3">
@@ -94,10 +123,29 @@ function NewQuote({ rfq, quotedIds, onCreated }: { rfq: Rfq; quotedIds: Set<stri
         </div>
         <div className="flex gap-4 text-sm">
           <label className="flex items-center gap-1"><input type="radio" checked={mode === "manual"} onChange={() => setMode("manual")} /> Enter by hand</label>
+          <label className="flex items-center gap-1"><input type="radio" checked={mode === "sheet"} onChange={() => setMode("sheet")} /> Import a price sheet (CSV/XLSX)</label>
           <label className="flex items-center gap-1"><input type="radio" checked={mode === "document"} onChange={() => setMode("document")} /> From an analysed document</label>
         </div>
       </div>
-      {mode === "document" ? (
+      {mode === "sheet" && (
+        <div className="space-y-2">
+          <div className="space-y-1">
+            <Label htmlFor="q-file">Price sheet</Label>
+            <Input id="q-file" type="file" accept=".csv,.xlsx,.txt" onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
+            <p className="text-xs text-muted-foreground">
+              Columns are found by their header: Description, Quantity, Unit, Unit price, Total, Lead time, MOQ, Currency, and optionally RFQ line.
+              Numbers are read exactly; anything ambiguous is left empty and listed for you. An RFQ line number only becomes a suggested match.
+            </p>
+          </div>
+          <div className="grid gap-2 md:grid-cols-4">
+            <Input aria-label="Currency (if not in the sheet)" placeholder="Currency (if not in sheet)" maxLength={3} value={header.currency} onChange={(e) => setHeader({ ...header, currency: e.target.value })} />
+            <Input aria-label="Incoterms" placeholder="Incoterms" maxLength={3} value={header.incoterms} onChange={(e) => setHeader({ ...header, incoterms: e.target.value })} />
+            <Input aria-label="Payment terms" placeholder="Payment terms" value={header.payment_terms} onChange={(e) => setHeader({ ...header, payment_terms: e.target.value })} />
+            <Input aria-label="Valid until" type="date" value={header.valid_until} onChange={(e) => setHeader({ ...header, valid_until: e.target.value })} />
+          </div>
+        </div>
+      )}
+      {mode === "sheet" ? null : mode === "document" ? (
         <div className="space-y-1">
           <Label htmlFor="q-doc">Quote document</Label>
           <Select id="q-doc" value={docId} onChange={(e) => setDocId(e.target.value)} required>
@@ -118,7 +166,7 @@ function NewQuote({ rfq, quotedIds, onCreated }: { rfq: Rfq; quotedIds: Set<stri
           <LinesEditor rfq={rfq} lines={lines} setLines={setLines} />
         </>
       )}
-      <Button type="submit" disabled={!supplier || (mode === "document" && !docId)}>Record quote</Button>
+      <Button type="submit" disabled={!supplier || (mode === "document" && !docId) || (mode === "sheet" && !file)}>{mode === "sheet" ? "Import sheet" : "Record quote"}</Button>
     </form>
   );
 }
@@ -153,6 +201,7 @@ function QuoteCard({ rfq, quote, canEdit, onChanged }: { rfq: Rfq; quote: Quote;
           <CardTitle>{quote.supplier_name}</CardTitle>
           <div className="flex gap-2">
             {quote.source === "analysis" && <Badge variant="neutral">from document</Badge>}
+            {quote.source === "import" && <Badge variant="neutral">imported sheet</Badge>}
             <Badge variant={draft ? "caution" : "default"}>{draft ? "Draft – not used in comparison" : "Verified"}</Badge>
           </div>
         </div>
@@ -185,6 +234,7 @@ function QuoteCard({ rfq, quote, canEdit, onChanged }: { rfq: Rfq; quote: Quote;
                   <th className="py-1 pr-3 text-right font-medium">Unit price</th>
                   <th className="py-1 pr-3 text-right font-medium">Total</th>
                   <th className="py-1 pr-3 text-right font-medium">Days</th>
+                  <th className="py-1 pr-3 text-right font-medium">MOQ</th>
                   <th className="py-1 font-medium">Answers</th>
                 </tr>
               </thead>
@@ -199,6 +249,7 @@ function QuoteCard({ rfq, quote, canEdit, onChanged }: { rfq: Rfq; quote: Quote;
                     <td className="py-2 pr-3 text-right">{fmt(l.unit_price)}</td>
                     <td className="py-2 pr-3 text-right">{fmt(l.total_price)}</td>
                     <td className="py-2 pr-3 text-right">{fmt(l.lead_time_days)}</td>
+                    <td className="py-2 pr-3 text-right">{fmt(l.moq ?? null)}</td>
                     <td className="py-2">
                       {draft && open ? (
                         <div className="flex items-center gap-1">
@@ -216,7 +267,7 @@ function QuoteCard({ rfq, quote, canEdit, onChanged }: { rfq: Rfq; quote: Quote;
                     </td>
                   </tr>
                 ))}
-                {quote.lines.length === 0 && <tr><td colSpan={6} className="py-4 text-center text-muted-foreground">No lines.</td></tr>}
+                {quote.lines.length === 0 && <tr><td colSpan={7} className="py-4 text-center text-muted-foreground">No lines.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -229,7 +280,7 @@ function QuoteCard({ rfq, quote, canEdit, onChanged }: { rfq: Rfq; quote: Quote;
                 <Button size="sm" variant="outline" onClick={() => {
                   setLines(quote.lines.map((l) => ({
                     description: l.description, quantity: l.quantity?.toString() ?? "", unit: l.unit ?? "", unit_price: l.unit_price?.toString() ?? "",
-                    total_price: l.total_price?.toString() ?? "", lead_time_days: l.lead_time_days?.toString() ?? "",
+                    total_price: l.total_price?.toString() ?? "", lead_time_days: l.lead_time_days?.toString() ?? "", moq: l.moq?.toString() ?? "",
                     rfq_item_id: l.match_status === "confirmed" ? l.rfq_item_id ?? "" : "",
                   })));
                   setEditingLines(true);

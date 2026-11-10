@@ -78,7 +78,7 @@ async def clean_state(admin_engine):
     async with admin_engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE counters, domain_events, comparisons, rfq_quote_lines, rfq_quotes, rfq_packages, rfq_suppliers, rfq_items, rfqs, "
+                "TRUNCATE award_recommendations, fx_rates, unit_conversions, counters, domain_events, comparisons, rfq_quote_lines, rfq_quotes, rfq_packages, rfq_suppliers, rfq_items, rfqs, "
                 "supplier_qualification_checks, qualification_criteria, supplier_contacts, supplier_category_links, supplier_categories, suppliers, "
                 "review_events, parameters, requirements, extraction_runs, jobs, ai_audit_logs, document_extractions, documents, audit_logs, "
                 "mfa_recovery_codes, email_tokens, auth_sessions, invitations, users, "

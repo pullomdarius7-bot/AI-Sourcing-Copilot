@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     default_currency: str = "EUR"
     org_display_name: str = ""  # overrides the organization name on RFQ documents when set
     comparison_outlier_ratio: float = 0.5  # a price this far below the median is flagged as an outlier
+    fx_max_age_days: int = 30  # an exchange rate older than this on the analysis date is flagged as stale
+    quote_validity_warning_days: int = 7  # a quote expiring within this many days is flagged
+    quote_import_max_mb: int = 5
 
     @property
     def max_upload_bytes(self) -> int:

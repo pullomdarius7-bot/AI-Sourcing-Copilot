@@ -184,49 +184,6 @@ async def test_comparison_exports(client, worker):
     assert sorted(actions) == ["pdf", "xlsx"]
 
 
-# --- Award ----------------------------------------------------------------------------------------------------------
-async def test_award_is_a_recorded_human_decision(client, worker):
-    o, rfq, (a, b, c), (qa, _, _) = await three_way(client, worker)
-    cmp_ = (await client.post(f"/rfqs/{rfq['id']}/comparisons", json={}, headers=o.buyer.headers)).json()
-    short = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": a["id"], "comparison_id": cmp_["id"], "note": "cheap"}, headers=o.approver.headers)
-    assert short.status_code == 422
-    buyer = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": a["id"], "comparison_id": cmp_["id"], "note": "Existing tooling, proven quality"}, headers=o.buyer.headers)
-    assert buyer.status_code == 403
-    res = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": a["id"], "comparison_id": cmp_["id"],
-                                                             "note": "Existing tooling, proven quality on PO 7781"}, headers=o.approver.headers)
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["status"] == "awarded" and body["awarded_supplier_id"] == a["id"] and body["awarded_by"] == o.approver.user_id
-    assert body["award_comparison_id"] == cmp_["id"] and body["award_note"].startswith("Existing tooling")
-    award = next(e for e in (await client.get(f"/rfqs/{rfq['id']}/events", headers=o.auditor.headers)).json() if e["action"] == "awarded")
-    assert award["data"]["deviates_from_ranking"] is True and award["data"]["rank"] == 2  # Orion Cast scored highest
-    assert (await client.post(f"/quotes/{qa['id']}/reopen", json={"reason": "late change"}, headers=o.buyer.headers)).status_code == 409
-    assert (await client.post(f"/rfqs/{rfq['id']}/cancel", json={"reason": "too late now"}, headers=o.buyer.headers)).status_code == 409
-    text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO((await client.get(f"/comparisons/{cmp_['id']}/pdf", headers=o.buyer.headers)).content)).pages)
-    assert "Awarded to Northwind Metals" in text
-
-
-async def test_award_requires_a_current_comparison(client, worker):
-    o, rfq, (a, b, c), (qa, _, _) = await three_way(client, worker)
-    cmp_ = (await client.post(f"/rfqs/{rfq['id']}/comparisons", json={}, headers=o.buyer.headers)).json()
-    await client.post(f"/quotes/{qa['id']}/reopen", json={"reason": "Supplier revised price"}, headers=o.buyer.headers)
-    assert (await client.get(f"/comparisons/{cmp_['id']}", headers=o.buyer.headers)).json()["stale"] is True
-    res = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": c["id"], "comparison_id": cmp_["id"], "note": "Lowest price and fastest delivery"}, headers=o.approver.headers)
-    assert res.status_code == 409 and res.json()["error"]["code"] == "stale_comparison"
-
-
-async def test_award_only_to_a_ranked_qualified_supplier(client, worker):
-    o, rfq, (a, b, c), _ = await three_way(client, worker)
-    outsider = await qualified_supplier(client, o, "Outsider Ltd")
-    cmp_ = (await client.post(f"/rfqs/{rfq['id']}/comparisons", json={}, headers=o.buyer.headers)).json()
-    res = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": outsider["id"], "comparison_id": cmp_["id"], "note": "Personal preference here"}, headers=o.approver.headers)
-    assert res.status_code == 409 and res.json()["error"]["code"] == "not_ranked"
-    await client.post(f"/suppliers/{c['id']}/block", json={"reason": "Sanctions hit"}, headers=o.approver.headers)
-    cmp_ = (await client.post(f"/rfqs/{rfq['id']}/comparisons", json={}, headers=o.buyer.headers)).json()
-    res = await client.post(f"/rfqs/{rfq['id']}/award", json={"supplier_id": c["id"], "comparison_id": cmp_["id"], "note": "Lowest price and fastest delivery"}, headers=o.approver.headers)
-    assert res.status_code == 409 and res.json()["error"]["code"] == "supplier_not_qualified"
-
-
 async def test_quotes_and_comparisons_are_isolated_between_organizations(client, worker):
     o, rfq, _, (qa, _, _) = await three_way(client, worker)
     b = await org(client, email="admin@beta.test", name="Beta", domain="beta.test")

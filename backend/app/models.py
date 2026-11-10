@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -11,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -474,6 +476,10 @@ class Rfq(TenantMixin, Base):
     awarded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     awarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     award_note: Mapped[str | None] = mapped_column(Text)
+    award_recommendation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    required_by: Mapped[Any] = mapped_column(Date)  # delivery needed by; drives lead-time analysis
+    requested_incoterms: Mapped[str | None] = mapped_column(String(10))
+    requested_payment_terms: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _created()
 
@@ -543,7 +549,7 @@ class RfqQuote(TenantMixin, Base):
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
     document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     extraction_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    source: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")  # analysis | manual
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")  # analysis | manual | import
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="draft")  # draft | verified
     currency: Mapped[str | None] = mapped_column(String(3))
     incoterms: Mapped[str | None] = mapped_column(String(10))
@@ -574,6 +580,7 @@ class RfqQuoteLine(TenantMixin, Base):
     unit_price: Mapped[float | None] = mapped_column(Float)
     total_price: Mapped[float | None] = mapped_column(Float)
     lead_time_days: Mapped[float | None] = mapped_column(Float)
+    moq: Mapped[float | None] = mapped_column(Float)  # minimum order quantity, in the line's unit
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     source_quote: Mapped[str | None] = mapped_column(Text)
 
@@ -591,6 +598,56 @@ class Comparison(TenantMixin, Base):
     params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     inputs_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = _created()
+
+
+class AwardRecommendation(TenantMixin, Base):
+    """A buyer's proposed award, decided by a separate approver. Approval is what awards the RFQ."""
+
+    __tablename__ = "award_recommendations"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    comparison_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("comparisons.id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")  # pending | approved | rejected | withdrawn
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_at: Mapped[datetime] = _created()
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+
+
+class FxRate(TenantMixin, Base):
+    """Exchange rate recorded by the organization: 1 base = rate quote, valid from a date. Never fetched."""
+
+    __tablename__ = "fx_rates"
+
+    id: Mapped[uuid.UUID] = _pk()
+    base: Mapped[str] = mapped_column(String(3), nullable=False)
+    quote: Mapped[str] = mapped_column(String(3), nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(24, 10), nullable=False)
+    valid_from: Mapped[Any] = mapped_column(Date, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(200))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = _created()
+
+
+class UnitConversion(TenantMixin, Base):
+    """Organization rule: 1 from_unit = factor to_unit (e.g. 1 box = 50 pcs, 1 pcs = 0.12 kg)."""
+
+    __tablename__ = "unit_conversions"
+
+    id: Mapped[uuid.UUID] = _pk()
+    from_unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    to_unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    factor: Mapped[Decimal] = mapped_column(Numeric(30, 12), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(300))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = _created()
 
 

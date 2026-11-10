@@ -47,9 +47,13 @@ function Steps({ status }: { status: Rfq["status"] }) {
 }
 
 function DetailsForm({ rfq, onSaved }: { rfq: Rfq; onSaved: () => void }) {
-  const [form, setForm] = useState({ title: rfq.title, due: rfq.response_due_date ?? "", currency: rfq.currency, message: rfq.message ?? "" });
+  const initial = {
+    title: rfq.title, due: rfq.response_due_date ?? "", currency: rfq.currency, message: rfq.message ?? "",
+    requiredBy: rfq.required_by ?? "", incoterms: rfq.requested_incoterms ?? "", payment: rfq.requested_payment_terms ?? "",
+  };
+  const [form, setForm] = useState(initial);
   const [error, setError] = useState<string | null>(null);
-  const dirty = form.title !== rfq.title || form.due !== (rfq.response_due_date ?? "") || form.currency !== rfq.currency || form.message !== (rfq.message ?? "");
+  const dirty = (Object.keys(initial) as (keyof typeof initial)[]).some((k) => form[k] !== initial[k]);
   return (
     <form
       className="grid gap-3 md:grid-cols-[1fr_10rem_6rem]"
@@ -57,7 +61,10 @@ function DetailsForm({ rfq, onSaved }: { rfq: Rfq; onSaved: () => void }) {
         e.preventDefault();
         setError(null);
         try {
-          await api(`rfqs/${rfq.id}`, { method: "PATCH", body: { title: form.title, response_due_date: form.due || null, currency: form.currency, message: form.message || null } });
+          await api(`rfqs/${rfq.id}`, { method: "PATCH", body: {
+            title: form.title, response_due_date: form.due || null, currency: form.currency, message: form.message || null,
+            required_by: form.requiredBy || null, requested_incoterms: form.incoterms || null, requested_payment_terms: form.payment || null,
+          } });
           onSaved();
         } catch (err) {
           setError(errorMessage(err));
@@ -68,6 +75,10 @@ function DetailsForm({ rfq, onSaved }: { rfq: Rfq; onSaved: () => void }) {
       <div className="space-y-1"><Label htmlFor="d-title">Title</Label><Input id="d-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
       <div className="space-y-1"><Label htmlFor="d-due">Quotation due</Label><Input id="d-due" type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} /></div>
       <div className="space-y-1"><Label htmlFor="d-cur">Currency</Label><Input id="d-cur" maxLength={3} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} /></div>
+      <div className="space-y-1"><Label htmlFor="d-req">Delivery required by</Label><Input id="d-req" type="date" value={form.requiredBy} onChange={(e) => setForm({ ...form, requiredBy: e.target.value })} /></div>
+      <div className="space-y-1"><Label htmlFor="d-inco">Incoterms requested</Label><Input id="d-inco" maxLength={3} placeholder="e.g. DAP" value={form.incoterms} onChange={(e) => setForm({ ...form, incoterms: e.target.value.toUpperCase() })} /></div>
+      <div className="space-y-1"><Label htmlFor="d-pay">Payment terms requested</Label><Input id="d-pay" placeholder="e.g. Net 30" value={form.payment} onChange={(e) => setForm({ ...form, payment: e.target.value })} /></div>
+      <p className="text-xs text-muted-foreground md:col-span-3">The required date and requested terms are sent to suppliers and used to flag late delivery and differing terms in the comparison.</p>
       <div className="space-y-1 md:col-span-3"><Label htmlFor="d-msg">Message to suppliers</Label><Textarea id="d-msg" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></div>
       {dirty && <div><Button type="submit" size="sm">Save details</Button></div>}
     </form>
@@ -145,7 +156,7 @@ export default function RfqPage() {
             {rfq.status === "pending_approval" && "Waiting for approval. The approver sees exactly what will be sent and to whom."}
             {rfq.status === "approved" && `Approved ${formatDate(rfq.approved_at)}${rfq.decision_note ? `: ${rfq.decision_note}` : ""}. Send it to the invited suppliers.`}
             {rfq.status === "sent" && `Sent ${formatDate(rfq.sent_at)}. Record quotes as they arrive, verify them, then compare.`}
-            {rfq.status === "closed" && "Closed for new quotes. Finish verifying, compare and record the award."}
+            {rfq.status === "closed" && "Closed for new quotes. Finish verifying, compare, recommend a supplier and have the award approved."}
             {rfq.status === "awarded" && `Awarded ${formatDate(rfq.awarded_at)}.`}
             {rfq.status === "cancelled" && "This RFQ is cancelled."}
           </CardDescription>
@@ -216,10 +227,10 @@ export default function RfqPage() {
         <Card>
           <CardHeader>
             <CardTitle>Comparison</CardTitle>
-            <CardDescription>Deterministic scores with the reasoning shown for every supplier. No currency or unit conversion is assumed.</CardDescription>
+            <CardDescription>Deterministic scores with the reasoning shown for every supplier. Currencies and units are converted only with recorded rates and exact rules.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ComparisonPanel key={tick} rfq={rfq} canRun={can("comparisons:run")} canAward={can("rfqs:approve")} onAwarded={reload} />
+            <ComparisonPanel key={tick} rfq={rfq} canRun={can("comparisons:run")} canApprove={can("rfqs:approve")} meId={me.id} onAwarded={reload} />
           </CardContent>
         </Card>
       )}

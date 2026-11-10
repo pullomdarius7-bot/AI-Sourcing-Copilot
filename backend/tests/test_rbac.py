@@ -25,6 +25,9 @@ def test_permission_matrix():
         assert not has_permission("buyer", perm), perm
     assert {"requirements:approve", "suppliers:qualify", "rfqs:approve", "comparisons:run"} <= set(permissions_for("approver"))
     assert not has_permission("approver", Permission.RFQS_MANAGE) and not has_permission("approver", Permission.QUOTES_MANAGE)
+    assert has_permission("approver", Permission.REFERENCE_MANAGE) and has_permission("admin", Permission.REFERENCE_MANAGE)
+    for role in ("buyer", "requester", "auditor"):
+        assert not has_permission(role, Permission.REFERENCE_MANAGE), role
     assert has_permission("admin", Permission.JOBS_MANAGE)
     assert not has_permission("nonsense", Permission.ORG_READ)
 

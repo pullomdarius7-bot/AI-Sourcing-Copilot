@@ -30,6 +30,22 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
   return data as T;
 }
 
+/** Multipart upload through the same proxy (the browser sets the boundary header). */
+export async function apiForm<T = unknown>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`/api/${path}`, { method: "POST", body: form, credentials: "same-origin", cache: "no-store" });
+  const text = await res.text();
+  let data: { error?: { code?: string; message?: string } } | null = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, data?.error?.code ?? "error", data?.error?.message ?? "Something went wrong");
+  }
+  return data as T;
+}
+
 export function useFetch<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<ApiError | null>(null);

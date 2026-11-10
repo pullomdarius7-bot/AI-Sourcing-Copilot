@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ const NAV = [
   { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review" },
   { href: "/suppliers", label: "Suppliers", icon: Building2, permission: "suppliers:read" },
   { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read" },
+  { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },

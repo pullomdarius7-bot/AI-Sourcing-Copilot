@@ -37,12 +37,16 @@ def comparison_workbook(result: dict[str, Any], *, rfq_number: str, rfq_title: s
     ws.title = "Ranking"
     pct = lambda v: None if v is None else round(v * 100, 1)  # noqa: E731
     _sheet(ws, ["Rank", "Supplier", "Code", "Score", "Price", "Lead time", "Coverage", "Qualification",
-                f"Basket total ({result['currency']})", "Lead time (days)", "Incoterms", "Payment terms", "Valid until", "Flags"],
+                f"Basket total ({result['currency']})", "Lead time (days)", "Incoterms", "Payment terms", "Valid until", "Flags",
+                "Risk points", "Risk level", "On time", f"MOQ extra cost ({result['currency']})"],
            [[r["rank"], r["supplier_name"], r["supplier_code"], r["score"], pct(r["criteria"]["price"]["score"]),
              pct(r["criteria"]["lead_time"]["score"]), pct(r["criteria"]["coverage"]["score"]),
              pct(r["criteria"]["qualification"]["score"]), r["basket_total"], r["lead_time_days"], r["incoterms"],
-             r["payment_terms"], r["valid_until"], ", ".join(r["flags"])] for r in result["ranking"]],
-           [6, 32, 12, 8, 8, 10, 10, 13, 18, 14, 11, 20, 12, 50])
+             r["payment_terms"], r["valid_until"], ", ".join(r["flags"]),
+             (r.get("risk") or {}).get("score"), (r.get("risk") or {}).get("level"),
+             None if r.get("on_time") is None else ("yes" if r["on_time"] else "no"), r.get("moq_excess_total")]
+            for r in result["ranking"]],
+           [6, 32, 12, 8, 8, 10, 10, 13, 18, 14, 11, 20, 12, 50, 11, 11, 9, 18])
 
     suppliers = [(r["supplier_id"], r["supplier_name"]) for r in result["ranking"]]
     prices = wb.create_sheet("Line prices")
@@ -62,6 +66,11 @@ def comparison_workbook(result: dict[str, Any], *, rfq_number: str, rfq_title: s
     _sheet(excluded, ["Supplier", "Reason", "Detail"],
            [[e["supplier_name"], e["reason"], e["detail"]] for e in result["excluded"]], [32, 18, 80])
 
+    deviations = wb.create_sheet("Deviations")
+    _sheet(deviations, ["Supplier", "Severity", "Line", "Code", "Deviation"],
+           [[r["supplier_name"], d["severity"], d["line"], d["code"], d["message"]]
+            for r in result["ranking"] for d in r.get("deviations", [])], [32, 10, 6, 26, 100])
+
     explain = wb.create_sheet("Explanation")
     _sheet(explain, ["Rank", "Supplier", "Explanation"],
            [[r["rank"], r["supplier_name"], "\n".join(r["explanation"])] for r in result["ranking"]], [6, 32, 120])
@@ -70,7 +79,9 @@ def comparison_workbook(result: dict[str, Any], *, rfq_number: str, rfq_title: s
     _sheet(meta, ["Field", "Value"], [
         ["RFQ", rfq_number], ["Title", rfq_title], ["Generated", generated_at], ["Currency", result["currency"]],
         ["As of", result["as_of"]], ["Inputs SHA-256", result["inputs_sha256"]],
+        ["Engine version", result.get("engine_version", "1")],
         *[[f"Weight: {k}", v] for k, v in result["weights"].items()],
+        *[[f"Exchange rate {c}", info["path"]] for c, info in (result.get("fx_used") or {}).items()],
         ["Notes", "\n".join(result["global_flags"]) or "-"], ["Decision", result["decision_note"]],
     ], [22, 100])
     buf = io.BytesIO()

@@ -1,9 +1,10 @@
 import json
 import re
 import uuid
+from datetime import date
 from urllib.parse import quote as urlquote
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from app.db import get_db, set_tenant
 from app.deps import Principal, require_permission
 from app.errors import ApiError, not_found
 from app.models import (
+    AwardRecommendation,
     Comparison,
     Rfq,
     RfqPackage,
@@ -67,7 +69,10 @@ async def rfq_out(db: AsyncSession, rfq: Rfq) -> rs.RfqOut:
         submitted_by=rfq.submitted_by, submitted_at=rfq.submitted_at, approved_by=rfq.approved_by,
         approved_at=rfq.approved_at, sent_at=rfq.sent_at, closed_at=rfq.closed_at, decision_note=rfq.decision_note,
         awarded_supplier_id=rfq.awarded_supplier_id, award_comparison_id=rfq.award_comparison_id,
-        awarded_by=rfq.awarded_by, awarded_at=rfq.awarded_at, award_note=rfq.award_note, created_at=rfq.created_at,
+        awarded_by=rfq.awarded_by, awarded_at=rfq.awarded_at, award_note=rfq.award_note,
+        award_recommendation_id=rfq.award_recommendation_id, required_by=rfq.required_by,
+        requested_incoterms=rfq.requested_incoterms, requested_payment_terms=rfq.requested_payment_terms,
+        created_at=rfq.created_at,
         updated_at=rfq.updated_at,
         items=[rs.ItemOut(id=i.id, position=i.position, line=n, kind=i.kind, statement=i.statement, category=i.category,
                           priority=i.priority, quantity=i.quantity, unit=i.unit, parameters=i.parameters,
@@ -188,11 +193,6 @@ async def cancel(rfq_id: uuid.UUID, body: sc.ReasonIn, p: Principal = Depends(re
     return await rfq_out(db, await svc.cancel(db, p, await svc.get_rfq(db, p, rfq_id, lock=True), body.reason))
 
 
-@router.post("/rfqs/{rfq_id}/award", response_model=rs.RfqOut)
-async def award(rfq_id: uuid.UUID, body: rs.AwardIn, p: Principal = Depends(require_permission(APPROVE)), db: AsyncSession = Depends(get_db)):
-    return await rfq_out(db, await svc.award(db, p, await svc.get_rfq(db, p, rfq_id, lock=True), body))
-
-
 @router.get("/rfqs/{rfq_id}/events", response_model=list[sc.EventOut])
 async def rfq_events(rfq_id: uuid.UUID, p: Principal = Depends(require_permission(READ)), db: AsyncSession = Depends(get_db)):
     rfq = await svc.get_rfq(db, p, rfq_id)
@@ -289,7 +289,7 @@ async def _quotes_out(db: AsyncSession, org_id: uuid.UUID, rfq_id: uuid.UUID, qu
         lines=[rs.QuoteLineOut(id=ln.id, position=ln.position, rfq_item_id=ln.rfq_item_id, match_status=ln.match_status,
                                match_score=ln.match_score, description=ln.description, quantity=ln.quantity, unit=ln.unit,
                                unit_price=ln.unit_price, total_price=ln.total_price, lead_time_days=ln.lead_time_days,
-                               confidence=ln.confidence, source_quote=ln.source_quote) for ln in lines[q.id]],
+                               moq=ln.moq, confidence=ln.confidence, source_quote=ln.source_quote) for ln in lines[q.id]],
     ) for q, name in rows]
 
 
@@ -313,6 +313,30 @@ async def create_quote(rfq_id: uuid.UUID, body: rs.QuoteIn, p: Principal = Depen
 async def quote_from_document(rfq_id: uuid.UUID, body: rs.QuoteFromDocumentIn, p: Principal = Depends(require_permission(QUOTES)), db: AsyncSession = Depends(get_db)):
     rfq = await svc.get_rfq(db, p, rfq_id, lock=True)
     return await _one_quote(db, await svc.quote_from_document(db, p, rfq, body))
+
+
+@router.post("/rfqs/{rfq_id}/quotes/import", response_model=rs.ImportOut, status_code=201)
+async def import_quote(
+    rfq_id: uuid.UUID,
+    supplier_id: uuid.UUID = Form(...),
+    file: UploadFile = File(...),
+    currency: str | None = Form(default=None, pattern=r"^[A-Za-z]{3}$"),
+    incoterms: str | None = Form(default=None, pattern=r"^[A-Za-z]{3}$"),
+    payment_terms: str | None = Form(default=None, max_length=200),
+    valid_until: date | None = Form(default=None),
+    p: Principal = Depends(require_permission(QUOTES)),
+    db: AsyncSession = Depends(get_db),
+):
+    rfq = await svc.get_rfq(db, p, rfq_id)
+    limit = svc.settings.quote_import_max_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise ApiError(413, "file_too_large", f"Quote sheets are limited to {svc.settings.quote_import_max_mb} MB")
+    header = {"currency": currency.upper() if currency else None, "incoterms": incoterms.upper() if incoterms else None,
+              "payment_terms": payment_terms.strip() if payment_terms else None, "valid_until": valid_until}
+    quote, parsed = await svc.import_quote(db, p, rfq, supplier_id, file.filename or "quote.csv", data, header)
+    return rs.ImportOut(quote=await _one_quote(db, quote), warnings=parsed.warnings, rows_read=parsed.rows_read,
+                        rows_skipped=parsed.rows_skipped, columns=parsed.columns, currency_detected=parsed.currency)
 
 
 @router.patch("/quotes/{quote_id}", response_model=rs.QuoteOut)
@@ -413,3 +437,60 @@ async def comparison_xlsx(comparison_id: uuid.UUID, p: Principal = Depends(requi
     await db.commit()
     return _download(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", f"{rfq.number}-comparison.xlsx")
 
+
+
+# --- Award recommendation & approval -------------------------------------------------------------------------------------------
+async def _recommendations_out(db: AsyncSession, org_id: uuid.UUID, recs: list[AwardRecommendation], rfq: Rfq) -> list[rs.RecommendationOut]:
+    await set_tenant(db, org_id)
+    if not recs:
+        return []
+    names = dict((await db.execute(select(Supplier.id, Supplier.name).where(Supplier.id.in_({r.supplier_id for r in recs})))).all())
+    user_ids = {u for r in recs for u in (r.submitted_by, r.decided_by) if u}
+    emails = dict((await db.execute(select(User.id, User.email).where(User.id.in_(user_ids))) ).all()) if user_ids else {}
+    comparisons = {c.id: c for c in await db.scalars(select(Comparison).where(Comparison.id.in_({r.comparison_id for r in recs})))}
+    out = []
+    for r in recs:
+        stale = r.status == "pending" and await svc.is_stale(db, rfq, comparisons[r.comparison_id])
+        out.append(rs.RecommendationOut(
+            id=r.id, rfq_id=r.rfq_id, comparison_id=r.comparison_id, supplier_id=r.supplier_id,
+            supplier_name=names.get(r.supplier_id, ""), rationale=r.rationale, status=r.status, snapshot=r.snapshot,
+            submitted_by=r.submitted_by, submitted_by_email=emails.get(r.submitted_by), submitted_at=r.submitted_at,
+            decided_by=r.decided_by, decided_by_email=emails.get(r.decided_by), decided_at=r.decided_at,
+            decision_note=r.decision_note, comparison_stale=stale, not_top_ranked=bool(r.snapshot.get("not_top_ranked")),
+        ))
+    return out
+
+
+@router.get("/rfqs/{rfq_id}/recommendations", response_model=list[rs.RecommendationOut])
+async def list_recommendations(rfq_id: uuid.UUID, p: Principal = Depends(require_permission(READ)), db: AsyncSession = Depends(get_db)):
+    rfq = await svc.get_rfq(db, p, rfq_id)
+    return await _recommendations_out(db, p.org_id, await svc.list_recommendations(db, rfq), rfq)
+
+
+@router.post("/rfqs/{rfq_id}/recommendations", response_model=rs.RecommendationOut, status_code=201)
+async def recommend(rfq_id: uuid.UUID, body: rs.RecommendationIn, p: Principal = Depends(require_permission(CMP_RUN)), db: AsyncSession = Depends(get_db)):
+    rfq = await svc.get_rfq(db, p, rfq_id, lock=True)
+    rec = await svc.recommend(db, p, rfq, body)
+    return (await _recommendations_out(db, p.org_id, [rec], rfq))[0]
+
+
+async def _after_decision(db: AsyncSession, p: Principal, rec: AwardRecommendation) -> rs.RecommendationOut:
+    await set_tenant(db, p.org_id)
+    rfq = await db.scalar(select(Rfq).where(Rfq.id == rec.rfq_id))
+    assert rfq is not None
+    return (await _recommendations_out(db, p.org_id, [rec], rfq))[0]
+
+
+@router.post("/recommendations/{rec_id}/approve", response_model=rs.RecommendationOut)
+async def approve_recommendation(rec_id: uuid.UUID, body: rs.DecisionIn, p: Principal = Depends(require_permission(APPROVE)), db: AsyncSession = Depends(get_db)):
+    return await _after_decision(db, p, await svc.approve_recommendation(db, p, rec_id, body.note))
+
+
+@router.post("/recommendations/{rec_id}/reject", response_model=rs.RecommendationOut)
+async def reject_recommendation(rec_id: uuid.UUID, body: rs.DecisionIn, p: Principal = Depends(require_permission(APPROVE)), db: AsyncSession = Depends(get_db)):
+    return await _after_decision(db, p, await svc.reject_recommendation(db, p, rec_id, body.note))
+
+
+@router.post("/recommendations/{rec_id}/withdraw", response_model=rs.RecommendationOut)
+async def withdraw_recommendation(rec_id: uuid.UUID, body: rs.DecisionIn, p: Principal = Depends(require_permission(CMP_RUN)), db: AsyncSession = Depends(get_db)):
+    return await _after_decision(db, p, await svc.withdraw_recommendation(db, p, rec_id, body.note))

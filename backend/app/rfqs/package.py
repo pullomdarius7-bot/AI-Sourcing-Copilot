@@ -37,11 +37,20 @@ def body_text(document: dict[str, Any], contact_name: str | None, sender_name: s
         "",
         "Please reply with:",
         f"  - prices in {document['currency']}, per line, using the line numbers above",
-        "  - quantity, unit and lead time in days for each line",
+        "  - quantity, unit, lead time in days and any minimum order quantity for each line",
         "  - your Incoterms, payment terms and quotation validity",
     ]
     if document.get("response_due_date"):
         lines.append(f"  - by {document['response_due_date']}")
+    terms = document.get("requested_terms") or {}
+    if terms:
+        lines += ["", "Requested terms:"]
+        if terms.get("required_by"):
+            lines.append(f"  - delivery required by {terms['required_by']}")
+        if terms.get("incoterms"):
+            lines.append(f"  - Incoterms {terms['incoterms']}")
+        if terms.get("payment_terms"):
+            lines.append(f"  - payment terms: {terms['payment_terms']}")
     lines += [
         "",
         f"Please keep the reference {document['number']} in the subject of your reply.",

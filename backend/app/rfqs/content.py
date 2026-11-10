@@ -36,11 +36,15 @@ def parameter_text(param: dict[str, Any]) -> str:
 
 def build_document(
     *, number: str, title: str, version: int, currency: str, response_due_date: str | None, message: str | None,
-    organization: str, category: str | None, items: list[dict[str, Any]],
+    organization: str, category: str | None, items: list[dict[str, Any]], required_by: str | None = None,
+    incoterms: str | None = None, payment_terms: str | None = None,
 ) -> dict[str, Any]:
-    """Items are dicts with position, statement, category, priority, quantity, unit, parameters."""
+    """Items are dicts with position, statement, category, priority, quantity, unit, parameters.
+
+    Requested delivery date and terms are included only when set, so RFQs approved before they existed keep their hash."""
     ordered = sorted(items, key=lambda i: (i["position"], i["statement"]))
-    return {
+    terms = {k: v for k, v in (("required_by", required_by), ("incoterms", incoterms), ("payment_terms", payment_terms)) if v}
+    doc = {
         "schema": "ai-sourcing-copilot/rfq@1",
         "number": number,
         "title": title,
@@ -66,6 +70,9 @@ def build_document(
             for n, i in enumerate(ordered, start=1)
         ],
     }
+    if terms:
+        doc["requested_terms"] = terms
+    return doc
 
 
 def approval_hash(document: dict[str, Any], supplier_ids: list[str]) -> str:

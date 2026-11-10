@@ -126,6 +126,13 @@ def render_rfq_pdf(document: dict[str, Any], *, status: str, content_hash: str |
         ["Quotation due", document.get("response_due_date") or "Not set"],
         ["Currency", document["currency"]],
     ]
+    terms = document.get("requested_terms") or {}
+    if terms.get("required_by"):
+        meta.append(["Delivery required by", terms["required_by"]])
+    if terms.get("incoterms"):
+        meta.append(["Incoterms requested", terms["incoterms"]])
+    if terms.get("payment_terms"):
+        meta.append(["Payment terms requested", terms["payment_terms"]])
     if document.get("category"):
         meta.append(["Category", document["category"]])
     if draft:
@@ -168,7 +175,7 @@ def render_rfq_pdf(document: dict[str, Any], *, status: str, content_hash: str |
 
     instructions = [
         f"Quote in {document['currency']} and reference {document['number']} in your reply.",
-        "Give a unit price, quantity, unit and lead time in days for each requirement line, using the line numbers above.",
+        "Give a unit price, quantity, unit, lead time in days and any minimum order quantity for each requirement line, using the line numbers above.",
         "State your Incoterms, payment terms and how long the quotation is valid.",
         "If you cannot meet a requirement, say so on that line rather than leaving it out.",
     ]
@@ -211,7 +218,7 @@ def render_comparison_pdf(result: dict[str, Any], *, rfq_number: str, rfq_title:
         story.append(Paragraph(t(f"Awarded to {award['supplier']} by {award['by']} on {award['at']}: {award['note']}"), s["cell_b"]))
 
     story.append(Paragraph("Ranking", s["h2"]))
-    head = ["Rank", "Supplier", "Score", "Price", "Lead time", "Coverage", "Qualified", f"Basket ({currency})", "Flags"]
+    head = ["Rank", "Supplier", "Score", "Price", "Lead time", "Coverage", "Qualified", "Risk", f"Basket ({currency})", "Flags"]
     rows = [[Paragraph(h, s["cell_b"]) for h in head]]
     for r in result["ranking"]:
         c = r["criteria"]
@@ -220,10 +227,11 @@ def render_comparison_pdf(result: dict[str, Any], *, rfq_number: str, rfq_title:
             Paragraph(f"{r['score']:.1f}", s["cell_r"]), Paragraph(_score(c["price"]["score"]), s["cell_r"]),
             Paragraph(_score(c["lead_time"]["score"]), s["cell_r"]), Paragraph(_score(c["coverage"]["score"]), s["cell_r"]),
             Paragraph("yes" if r["qualified"] else "no", s["cell"]),
+            Paragraph(t(f"{r['risk']['score']} {r['risk']['level']}") if r.get("risk") else "–", s["cell"]),
             Paragraph(t(format_number(r["basket_total"])) if r["basket_total"] is not None else "unknown", s["cell_r"]),
             Paragraph(t(", ".join(r["flags"]) or "–"), s["small"]),
         ])
-    story.append(_grid(rows, [12 * mm, 54 * mm, 15 * mm, 15 * mm, 18 * mm, 21 * mm, 21 * mm, 28 * mm, 85 * mm]))
+    story.append(_grid(rows, [12 * mm, 52 * mm, 15 * mm, 15 * mm, 18 * mm, 20 * mm, 19 * mm, 22 * mm, 28 * mm, 68 * mm]))
 
     if result["ranking"]:
         story.append(Paragraph(f"Line prices ({t(currency)}, unit price × requested quantity)" if UNICODE
@@ -252,6 +260,36 @@ def render_comparison_pdf(result: dict[str, Any], *, rfq_number: str, rfq_title:
         rows = [[Paragraph(h, s["cell_b"]) for h in ("Supplier", "Reason")]]
         rows += [[Paragraph(t(e["supplier_name"]), s["cell"]), Paragraph(t(e["detail"]), s["cell"])] for e in result["excluded"]]
         story.append(_grid(rows, [70 * mm, 199 * mm]))
+
+    if result.get("lead_time_analysis") and result["ranking"]:
+        lt = result["lead_time_analysis"]
+        story.append(Paragraph("Lead time and minimum order quantities", s["h2"]))
+        rows = [[Paragraph(h, s["cell_b"]) for h in ("Supplier", "Lead time (days)", "Slack (days)", "On time",
+                                                     f"MOQ extra cost ({currency})")]]
+        for r in result["ranking"]:
+            on_time = "–" if r.get("on_time") is None else ("yes" if r["on_time"] else "no")
+            rows.append([Paragraph(t(r["supplier_name"]), s["cell"]),
+                         Paragraph(format_number(r["lead_time_days"]) if r["lead_time_days"] is not None else "not stated", s["cell_r"]),
+                         Paragraph(format_number(r["slack_days"]) if r.get("slack_days") is not None else "–", s["cell_r"]),
+                         Paragraph(on_time, s["cell"]),
+                         Paragraph(t(format_number(r["moq_excess_total"])) if r.get("moq_excess_total") else "–", s["cell_r"])])
+        story.append(_grid(rows, [90 * mm, 40 * mm, 35 * mm, 30 * mm, 74 * mm]))
+        need = f"Required by {lt['required_by']} ({lt['available_days']} days from the analysis date)." if lt.get("required_by") \
+            else "No required delivery date is set on the RFQ, so lead times are only compared with each other."
+        story.append(Paragraph(t(need), s["small"]))
+
+    if any(r.get("deviations") for r in result["ranking"]):
+        story.append(Paragraph("Risk and deviations from the request", s["h2"]))
+        rows = [[Paragraph(h, s["cell_b"]) for h in ("Supplier", "Severity", "Line", "Deviation")]]
+        for r in result["ranking"]:
+            for d in r.get("deviations", []):
+                if d["severity"] == "info":
+                    continue
+                rows.append([Paragraph(t(r["supplier_name"]), s["cell"]), Paragraph(d["severity"], s["cell"]),
+                             Paragraph(str(d["line"] or "–"), s["cell"]), Paragraph(t(d["message"]), s["small"])])
+        if len(rows) > 1:
+            story.append(_grid(rows, [60 * mm, 22 * mm, 14 * mm, 173 * mm]))
+        story.append(Paragraph("Risk points: critical 25, major 10, minor 3 (capped at 100); the risk criterion scores 100 minus the points.", s["small"]))
 
     if result["global_flags"]:
         story += [Paragraph("Notes", s["h2"]), Paragraph("<br/>".join(t(f) for f in result["global_flags"]), s["body"])]

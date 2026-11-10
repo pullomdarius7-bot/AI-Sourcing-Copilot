@@ -34,6 +34,7 @@ class Permission(StrEnum):
     QUOTES_MANAGE = "quotes:manage"
     COMPARISONS_READ = "comparisons:read"
     COMPARISONS_RUN = "comparisons:run"
+    REFERENCE_MANAGE = "reference:manage"  # exchange rates and unit conversion rules
 
 
 _BASE = {
@@ -53,7 +54,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.APPROVER: frozenset(
         _BASE | {
             Permission.REQUIREMENTS_REVIEW, Permission.REQUIREMENTS_APPROVE, Permission.SUPPLIERS_QUALIFY,
-            Permission.RFQS_APPROVE, Permission.COMPARISONS_RUN,
+            Permission.RFQS_APPROVE, Permission.COMPARISONS_RUN, Permission.REFERENCE_MANAGE,
         }
     ),
     Role.AUDITOR: frozenset(_BASE | {Permission.USERS_READ, Permission.AUDIT_READ}),

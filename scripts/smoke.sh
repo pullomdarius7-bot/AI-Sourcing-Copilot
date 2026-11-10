@@ -58,6 +58,16 @@ curl -fsS -b "$JAR" -X POST "$BASE/api/rfqs/$RFQ_ID/items" -H 'content-type: app
   -d '{"statement":"Smoke test line","quantity":10,"unit":"pcs"}' | grep -q '"Smoke test line"'
 curl -fsS -b "$JAR" "$BASE/api/rfqs/$RFQ_ID/pdf" | head -c 5 | grep -q '%PDF-'
 curl -fsS -b "$JAR" "$BASE/api/suppliers/export" | grep -q "Smoke Supplier"
+echo "-> quote analysis reference data"
+RATE_ID=$(curl -fsS -b "$JAR" -X POST "$BASE/api/fx-rates" -H 'content-type: application/json' \
+  -d "{\"base\":\"EUR\",\"quote\":\"USD\",\"rate\":\"1.0850\",\"valid_from\":\"$(date -u +%Y-%m-%d)\",\"source\":\"smoke $$\"}" \
+  | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+[ -n "$RATE_ID" ] || { echo "exchange rate creation failed"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/unit-conversions/check?from_unit=lb&to_unit=kg" | grep -q '"factor":"0.45359237"'
+curl -fsS -b "$JAR" "$BASE/api/units" | grep -q '"dimension":"mass"'
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X DELETE "$BASE/api/fx-rates/$RATE_ID")
+[ "$CODE" = "204" ] || { echo "exchange rate delete returned $CODE"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/rfqs/$RFQ_ID/recommendations" | grep -q '^\['
 echo "-> logout";           curl -fsS -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout" >/dev/null
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/auth/me")
 [ "$CODE" = "401" ] || { echo "expected 401 after logout, got $CODE"; exit 1; }

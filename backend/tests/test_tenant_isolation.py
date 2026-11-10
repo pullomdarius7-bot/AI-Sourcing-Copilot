@@ -84,6 +84,20 @@ async def test_app_role_is_not_superuser_and_cannot_bypass_rls():
     assert row.current_user == "copilot_app" and row.rolsuper is False and row.rolbypassrls is False
 
 
+async def test_every_tenant_table_has_forced_row_level_security(admin_engine):
+    async with admin_engine.connect() as conn:
+        rows = (await conn.execute(text(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace JOIN information_schema.columns col "
+            "ON col.table_schema = n.nspname AND col.table_name = c.relname AND col.column_name = 'organization_id' "
+            "WHERE n.nspname = 'public' AND c.relkind = 'r'"
+        ))).all()
+    names = {r.relname for r in rows}
+    assert {"fx_rates", "unit_conversions", "award_recommendations", "rfqs", "users"} <= names
+    unprotected = sorted(r.relname for r in rows if not (r.relrowsecurity and r.relforcerowsecurity))
+    assert unprotected == []
+
+
 async def test_rls_hides_all_rows_without_tenant_context(client):
     await two_orgs(client)
     async with SessionLocal() as s:
