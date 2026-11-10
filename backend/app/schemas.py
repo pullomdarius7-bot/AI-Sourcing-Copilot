@@ -192,3 +192,123 @@ class AuditOut(BaseModel):
     ip: str | None
     meta: dict[str, Any]
     created_at: datetime
+
+
+# --- Sprint 2: documents, jobs, AI -------------------------------------------------
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    storage_backend: str | None
+    status: str
+    scan_status: str
+    scan_engine: str | None
+    scan_detail: str | None
+    analysis_status: str
+    file_metadata: dict[str, Any]
+    error: str | None
+    uploaded_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    processed_at: datetime | None
+
+
+class JobBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    kind: str
+    status: str
+    attempts: int
+    max_attempts: int
+    run_at: datetime
+    last_error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class DocumentDetailOut(DocumentOut):
+    text_preview: str | None
+    jobs: list[JobBrief]
+
+
+class UploadOut(BaseModel):
+    document: DocumentOut
+    duplicate: bool
+
+
+class DocumentListOut(BaseModel):
+    items: list[DocumentOut]
+    total: int
+
+
+class UploadLimitsOut(BaseModel):
+    max_upload_mb: int
+    extensions: list[str]
+
+
+class AnalysisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    provider: str
+    model: str
+    prompt_version: str
+    result: dict[str, Any]
+    flags: list[Any]
+    needs_review: bool
+    input_tokens: int | None
+    output_tokens: int | None
+    created_at: datetime
+
+
+class JobOut(JobBrief):
+    organization_id: uuid.UUID
+    queue: str
+    payload: dict[str, Any]
+    locked_by: str | None
+    created_at: datetime
+
+
+class JobStatsOut(BaseModel):
+    queued: int
+    running: int
+    succeeded: int
+    dead: int
+    oldest_queued_age_seconds: int | None
+    succeeded_last_hour: int
+    avg_duration_ms_last_hour: int | None
+    active_workers: list[str]
+    by_kind: list[dict[str, Any]]
+
+
+class AiAuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_id: uuid.UUID | None
+    user_id: uuid.UUID | None
+    provider: str
+    model: str
+    purpose: str
+    status: str
+    prompt_sha256: str
+    response_sha256: str | None
+    input_chars: int
+    latency_ms: int
+    input_tokens: int | None
+    output_tokens: int | None
+    flags: list[Any]
+    error: str | None
+    created_at: datetime
+
+
+class ProviderOut(BaseModel):
+    name: str
+    model: str
+    external: bool

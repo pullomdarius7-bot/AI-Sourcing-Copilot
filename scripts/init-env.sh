@@ -13,6 +13,7 @@ sed \
   -e "s|^APP_DB_PASSWORD=.*|APP_DB_PASSWORD=$(rand_hex 24)|" \
   -e "s|^JWT_SECRET=.*|JWT_SECRET=$(rand_hex 48)|" \
   -e "s|^MFA_ENCRYPTION_KEY=.*|MFA_ENCRYPTION_KEY=$(fernet_key)|" \
+  -e "s|^MINIO_ROOT_PASSWORD=.*|MINIO_ROOT_PASSWORD=$(rand_hex 24)|" \
   .env.example > .env
 chmod 600 .env
 echo "Created .env with generated secrets."

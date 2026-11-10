@@ -54,3 +54,115 @@ export interface AuditEntry {
   meta: Record<string, unknown>;
   created_at: string;
 }
+
+export interface JobBrief {
+  id: string;
+  kind: string;
+  status: "queued" | "running" | "succeeded" | "dead";
+  attempts: number;
+  max_attempts: number;
+  run_at: string;
+  last_error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DocumentItem {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  storage_backend: string | null;
+  status: "uploaded" | "scanning" | "extracting" | "analyzing" | "processed" | "quarantined" | "failed";
+  scan_status: "pending" | "clean" | "infected";
+  scan_engine: string | null;
+  scan_detail: string | null;
+  analysis_status: "pending" | "succeeded" | "needs_review" | "skipped" | "failed";
+  file_metadata: Record<string, unknown>;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  processed_at: string | null;
+}
+
+export interface DocumentDetail extends DocumentItem {
+  text_preview: string | null;
+  jobs: JobBrief[];
+}
+
+export interface Field<T> {
+  value: T | null;
+  unknown: boolean;
+  confidence: number;
+  source: string | null;
+  verified: boolean;
+}
+
+export interface LineItem {
+  description: string;
+  source: string;
+  quantity: Field<number>;
+  unit: Field<string>;
+  unit_price: Field<number>;
+  total_price: Field<number>;
+  lead_time_days: Field<number>;
+}
+
+export interface AnalysisResult {
+  document_type: string;
+  summary: string;
+  supplier_name: Field<string>;
+  currency: Field<string>;
+  incoterms: Field<string>;
+  payment_terms: Field<string>;
+  valid_until: Field<string>;
+  line_items: LineItem[];
+  overall_confidence: number;
+  missing_fields: string[];
+}
+
+export interface Analysis {
+  id: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  result: AnalysisResult;
+  flags: string[];
+  needs_review: boolean;
+  created_at: string;
+}
+
+export interface JobStats {
+  queued: number;
+  running: number;
+  succeeded: number;
+  dead: number;
+  oldest_queued_age_seconds: number | null;
+  succeeded_last_hour: number;
+  avg_duration_ms_last_hour: number | null;
+  active_workers: string[];
+  by_kind: { kind: string; status: string; count: number }[];
+}
+
+export interface JobItem extends JobBrief {
+  queue: string;
+  payload: Record<string, unknown>;
+  locked_by: string | null;
+  created_at: string;
+}
+
+export interface AiAuditEntry {
+  id: number;
+  document_id: string | null;
+  provider: string;
+  model: string;
+  purpose: string;
+  status: string;
+  latency_ms: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  flags: string[];
+  error: string | null;
+  created_at: string;
+}

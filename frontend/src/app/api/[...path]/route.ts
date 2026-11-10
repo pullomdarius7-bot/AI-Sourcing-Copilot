@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
  * - Keeps JWTs in httpOnly cookies so page scripts can never read them.
  * - Attaches the bearer token, transparently refreshes it once on 401.
  * - Rejects cross-origin state-changing requests.
+ * - Passes JSON, multipart uploads and binary downloads through unchanged.
  */
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ const SECURE = process.env.COOKIE_SECURE === "true";
 const REFRESH_DAYS = Number(process.env.REFRESH_TOKEN_DAYS ?? "30");
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const TOKEN_PATHS = new Set(["auth/login", "auth/mfa/login"]);
+const PASSTHROUGH_HEADERS = ["content-disposition", "content-security-policy", "x-content-type-options", "retry-after"];
 
 type TokenBody = { access_token?: string; refresh_token?: string; expires_in?: number };
 
@@ -31,13 +33,13 @@ function clearTokens(res: NextResponse) {
   res.cookies.set("refresh_token", "", cookieOptions(0));
 }
 
-async function forward(req: NextRequest, path: string, body: string | undefined, access?: string) {
+async function forward(req: NextRequest, path: string, body: ArrayBuffer | undefined, access?: string) {
   const headers: Record<string, string> = {
-    accept: "application/json",
+    accept: req.headers.get("accept") ?? "application/json",
     "user-agent": req.headers.get("user-agent") ?? "",
     "x-forwarded-for": req.headers.get("x-forwarded-for") ?? "",
   };
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (body !== undefined) headers["content-type"] = req.headers.get("content-type") ?? "application/json";
   if (access) headers.authorization = `Bearer ${access}`;
   return fetch(`${API}/api/v1/${path}${req.nextUrl.search}`, {
     method: req.method,
@@ -60,7 +62,7 @@ async function handler(req: NextRequest, { params }: { params: { path: string[] 
     return NextResponse.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 });
   }
 
-  const body = SAFE_METHODS.has(req.method) ? undefined : await req.text();
+  const body = SAFE_METHODS.has(req.method) ? undefined : await req.arrayBuffer();
   let access = req.cookies.get("access_token")?.value;
   const refresh = req.cookies.get("refresh_token")?.value;
 
@@ -89,11 +91,11 @@ async function handler(req: NextRequest, { params }: { params: { path: string[] 
     }
   }
 
-  const text = await upstream.text();
-  let payload = text;
+  const buffer = await upstream.arrayBuffer();
+  let payload: ArrayBuffer | string = buffer;
   let tokens: TokenBody | null = null;
   if (TOKEN_PATHS.has(path) && upstream.ok) {
-    const data = JSON.parse(text) as TokenBody & Record<string, unknown>;
+    const data = JSON.parse(new TextDecoder().decode(buffer)) as TokenBody & Record<string, unknown>;
     if (data.access_token && data.refresh_token) {
       tokens = data;
       payload = JSON.stringify({ mfa_required: false });
@@ -102,10 +104,15 @@ async function handler(req: NextRequest, { params }: { params: { path: string[] 
 
   const res = new NextResponse(upstream.status === 204 ? null : payload, {
     status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store" },
+    headers: {
+      "content-type": upstream.headers.get("content-type") ?? "application/json",
+      "cache-control": "no-store",
+    },
   });
-  const retryAfter = upstream.headers.get("retry-after");
-  if (retryAfter) res.headers.set("retry-after", retryAfter);
+  for (const name of PASSTHROUGH_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) res.headers.set(name, value);
+  }
 
   if (tokens) setTokens(res, tokens);
   else if (rotated) setTokens(res, rotated);

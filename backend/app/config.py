@@ -38,6 +38,51 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30
     cors_origins: str = ""
 
+    # --- Documents & storage ---
+    max_upload_mb: int = 20
+    max_text_chars: int = 200_000
+    storage_backend: str = "auto"  # auto (MinIO, falling back to local) | minio | local
+    storage_local_dir: str = "/data/uploads"
+    minio_endpoint: str = ""  # host:port; empty disables MinIO
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "documents"
+    minio_secure: bool = False
+    minio_retry_after_seconds: int = 30
+
+    # --- Virus scanning ---
+    scan_backend: str = "both"  # both (built-in + ClamAV) | clamav | builtin
+    clamav_host: str = "clamav"
+    clamav_port: int = 3310
+    clamav_timeout_seconds: int = 60
+
+    # --- Job workers ---
+    worker_concurrency: int = 2
+    job_poll_interval_seconds: float = 1.0
+    job_timeout_seconds: int = 300
+    job_visibility_seconds: int = 600
+    job_max_attempts: int = 5
+    job_backoff_base_seconds: float = 5.0
+    job_backoff_max_seconds: float = 900.0
+    job_retention_days: int = 7
+
+    # --- AI layer ---
+    ai_provider_order: str = "local,anthropic,openai"
+    ai_timeout_seconds: float = 120.0
+    ai_max_input_chars: int = 60_000
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5-5"
+    anthropic_base_url: str = "https://api.anthropic.com"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4.1-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
+    local_llm_url: str = ""  # Ollama base URL, e.g. http://ollama:11434
+    local_llm_model: str = "llama3.1:8b"
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

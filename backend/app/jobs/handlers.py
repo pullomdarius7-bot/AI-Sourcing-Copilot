@@ -1,0 +1,174 @@
+"""Document pipeline: scan -> extract -> analyze. Each step is its own retryable job."""
+import asyncio
+import logging
+import uuid
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.service import get_ai_service
+from app.audit import record
+from app.db import set_tenant
+from app.files import extract as extractor
+from app.files import scan as scanner
+from app.jobs import queue
+from app.jobs.errors import PermanentError, RetryableError
+from app.models import Document, Job
+from app.storage import StorageError, get_storage
+
+logger = logging.getLogger("app.jobs")
+
+SCAN = "document.scan"
+EXTRACT = "document.extract"
+ANALYZE = "document.analyze"
+MAX_VISION_BYTES = 5 * 1024 * 1024
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+async def enqueue_pipeline(db: AsyncSession, doc: Document) -> None:
+    await queue.enqueue(
+        db, org_id=doc.organization_id, kind=SCAN, payload={"document_id": str(doc.id)},
+        dedupe_key=f"{SCAN}:{doc.id}",
+    )
+
+
+async def _load(db: AsyncSession, job: Job) -> Document:
+    doc = await db.get(Document, uuid.UUID(job.payload["document_id"]))
+    if doc is None:
+        raise PermanentError("The document no longer exists")
+    return doc
+
+
+async def _read(doc: Document) -> bytes:
+    if not doc.storage_backend or not doc.storage_key:
+        raise PermanentError("The document has no stored content")
+    try:
+        return await get_storage().get(doc.storage_backend, doc.storage_key)
+    except StorageError as exc:
+        raise RetryableError(str(exc)) from exc
+
+
+async def handle_scan(db: AsyncSession, job: Job) -> dict[str, Any]:
+    doc = await _load(db, job)
+    if doc.status == "quarantined":
+        return {"skipped": "already quarantined"}
+    doc.status, doc.updated_at = "scanning", _now()
+    await db.commit()
+    await set_tenant(db, doc.organization_id)
+
+    data = await _read(doc)
+    try:
+        result = await scanner.scan(data, doc.content_type)
+    except scanner.ScanUnavailable as exc:
+        raise RetryableError(str(exc)) from exc
+
+    if not result.clean:
+        doc.status, doc.scan_status = "quarantined", "infected"
+        doc.scan_engine, doc.scan_detail = result.engine, (result.signature or "")[:200]
+        doc.updated_at = _now()
+        backend, key = doc.storage_backend, doc.storage_key
+        doc.storage_key = None  # blocks download and reprocessing
+        record(
+            db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.quarantined",
+            meta={"document_id": str(doc.id), "signature": result.signature, "engine": result.engine},
+        )
+        await db.commit()
+        try:
+            await get_storage().delete(backend, key)  # type: ignore[arg-type]
+        except StorageError:
+            logger.warning("could not delete infected object %s", key)
+        return {"infected": result.signature}
+
+    doc.scan_status, doc.scan_engine, doc.scan_detail = "clean", result.engine, None
+    doc.status, doc.updated_at = "extracting", _now()
+    await queue.enqueue(
+        db, org_id=doc.organization_id, kind=EXTRACT, payload={"document_id": str(doc.id)},
+        dedupe_key=f"{EXTRACT}:{doc.id}",
+    )
+    await db.commit()
+    return {"clean": True, "engine": result.engine}
+
+
+async def handle_extract(db: AsyncSession, job: Job) -> dict[str, Any]:
+    doc = await _load(db, job)
+    if doc.scan_status != "clean":
+        raise PermanentError("Refusing to process a file that has not passed the virus scan")
+    data = await _read(doc)
+    try:
+        extracted = await asyncio.to_thread(extractor.extract, doc.content_type, data)
+    except extractor.ExtractionError as exc:
+        raise PermanentError(str(exc)) from exc
+    doc.file_metadata = {**extracted.metadata, "text_chars": len(extracted.text)}
+    doc.extracted_text = extracted.text or None
+    doc.status, doc.analysis_status, doc.updated_at = "analyzing", "pending", _now()
+    await queue.enqueue(
+        db, org_id=doc.organization_id, kind=ANALYZE, payload={"document_id": str(doc.id)},
+        dedupe_key=f"{ANALYZE}:{doc.id}",
+    )
+    await db.commit()
+    return {"text_chars": len(extracted.text)}
+
+
+async def handle_analyze(db: AsyncSession, job: Job) -> dict[str, Any]:
+    doc = await _load(db, job)
+    if doc.scan_status != "clean":
+        raise PermanentError("Refusing to analyze a file that has not passed the virus scan")
+    images: list[tuple[str, bytes]] = []
+    if doc.content_type.startswith("image/") and doc.size_bytes <= MAX_VISION_BYTES:
+        images.append((doc.content_type, await _read(doc)))
+    outcome = await get_ai_service().analyze_document(db, doc, images=images, user_id=doc.uploaded_by)
+    doc.analysis_status = outcome.status
+    if outcome.status == "skipped":
+        doc.file_metadata = {**doc.file_metadata, "analysis_skipped_reason": outcome.reason}
+    doc.status, doc.error = "processed", None
+    doc.processed_at = doc.updated_at = _now()
+    record(
+        db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.processed",
+        meta={"document_id": str(doc.id), "analysis": outcome.status},
+    )
+    await db.commit()
+    return {"analysis": outcome.status}
+
+
+async def _doc_for_hook(db: AsyncSession, job: Job) -> Document | None:
+    try:
+        return await db.get(Document, uuid.UUID(job.payload["document_id"]))
+    except (KeyError, ValueError):
+        return None
+
+
+async def dead_pipeline_step(db: AsyncSession, job: Job, error: str) -> None:
+    doc = await _doc_for_hook(db, job)
+    if doc is None or doc.status == "quarantined":
+        return
+    doc.status, doc.error, doc.updated_at = "failed", error[:2000], _now()
+    record(
+        db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.failed",
+        meta={"document_id": str(doc.id), "step": job.kind, "error": error[:300]},
+    )
+    await db.commit()
+
+
+async def dead_analyze(db: AsyncSession, job: Job, error: str) -> None:
+    doc = await _doc_for_hook(db, job)
+    if doc is None:
+        return
+    doc.status, doc.analysis_status = "processed", "failed"
+    doc.error, doc.processed_at, doc.updated_at = error[:2000], _now(), _now()
+    record(
+        db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.analysis_failed",
+        meta={"document_id": str(doc.id), "error": error[:300]},
+    )
+    await db.commit()
+
+
+Handler = Callable[[AsyncSession, Job], Awaitable[dict[str, Any] | None]]
+HANDLERS: dict[str, Handler] = {SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze}
+ON_DEAD: dict[str, Callable[[AsyncSession, Job, str], Awaitable[None]]] = {
+    SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze,
+}

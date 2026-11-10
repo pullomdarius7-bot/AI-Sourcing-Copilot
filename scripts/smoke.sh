@@ -19,6 +19,28 @@ echo "-> verify";           curl -fsS -X POST "$BASE/api/auth/verify-email" -H '
 echo "-> login";            curl -fsS -c "$JAR" -X POST "$BASE/api/auth/login" -H 'content-type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/dev/null
 echo "-> me";               curl -fsS -b "$JAR" "$BASE/api/auth/me" | grep -q "$EMAIL"
+echo "-> upload documents (clean file + EICAR test file)"
+TMP_DIR="$(mktemp -d)"; trap 'rm -f "$JAR"; rm -rf "$TMP_DIR"' EXIT
+printf 'Quotation\nSupplier: Smoke Metals\nCurrency: EUR\nItem: bracket | Qty 10 | Unit price 2.50\n' > "$TMP_DIR/quote-$$.txt"
+printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > "$TMP_DIR/eicar-$$.txt"
+upload() { curl -fsS -b "$JAR" -F "file=@$1;type=text/plain" "$BASE/api/documents" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'; }
+wait_for() {  # id, expected status, timeout seconds (ClamAV needs time to load signatures on first start)
+  end=$(( $(date +%s) + $3 ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    st=$(curl -fsS -b "$JAR" "$BASE/api/documents/$1" | grep -o '"status":"[a-z]*"' | head -n1 | cut -d'"' -f4)
+    [ "$st" = "$2" ] && return 0
+    case "$st" in failed|quarantined|processed) [ "$st" = "$2" ] || { echo "document $1 ended as $st, expected $2"; return 1; } ;; esac
+    sleep 3
+  done
+  echo "timed out waiting for document $1 to become $2"; return 1
+}
+GOOD_ID=$(upload "$TMP_DIR/quote-$$.txt"); BAD_ID=$(upload "$TMP_DIR/eicar-$$.txt")
+[ -n "$GOOD_ID" ] && [ -n "$BAD_ID" ] || { echo "upload failed"; exit 1; }
+wait_for "$GOOD_ID" processed "${DOC_TIMEOUT:-900}"
+wait_for "$BAD_ID" quarantined "${DOC_TIMEOUT:-900}"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/documents/$BAD_ID/download")
+[ "$CODE" = "409" ] || { echo "infected download should be blocked, got $CODE"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/documents/$GOOD_ID/download" | grep -q "Smoke Metals"
 echo "-> logout";           curl -fsS -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout" >/dev/null
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/auth/me")
 [ "$CODE" = "401" ] || { echo "expected 401 after logout, got $CODE"; exit 1; }

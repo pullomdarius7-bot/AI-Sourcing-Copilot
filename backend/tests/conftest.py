@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -20,6 +21,13 @@ os.environ["MIGRATION_DATABASE_URL"] = ADMIN_URL
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-0123456789")
 os.environ.setdefault("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ["EMAIL_BACKEND"] = "memory"
+os.environ["STORAGE_BACKEND"] = "local"
+os.environ["STORAGE_LOCAL_DIR"] = tempfile.mkdtemp(prefix="asc-uploads-")
+os.environ["MINIO_ENDPOINT"] = ""
+os.environ["SCAN_BACKEND"] = "builtin"
+os.environ["AI_PROVIDER_ORDER"] = ""
+os.environ["JOB_BACKOFF_BASE_SECONDS"] = "0"
+os.environ["MAX_UPLOAD_MB"] = "1"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["REQUIRE_EMAIL_VERIFICATION"] = "true"
 
@@ -33,6 +41,8 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app import email as mail  # noqa: E402
+from app.ai.service import AIService, set_ai_service  # noqa: E402
+from app.storage import set_storage  # noqa: E402
 from app.main import app  # noqa: E402
 from app.ratelimit import reset_rate_limits  # noqa: E402
 
@@ -68,13 +78,18 @@ async def clean_state(admin_engine):
     async with admin_engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE audit_logs, mfa_recovery_codes, email_tokens, auth_sessions, "
-                "invitations, users, organizations RESTART IDENTITY CASCADE"
+                "TRUNCATE jobs, ai_audit_logs, document_extractions, documents, audit_logs, "
+                "mfa_recovery_codes, email_tokens, auth_sessions, invitations, users, "
+                "organizations RESTART IDENTITY CASCADE"
             )
         )
     mail.outbox.clear()
     reset_rate_limits()
+    set_ai_service(AIService([]))  # no providers unless a test installs one
+    set_storage(None)
     yield
+    set_ai_service(None)
+    set_storage(None)
 
 
 @pytest_asyncio.fixture
@@ -82,3 +97,10 @@ async def client():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test/api/v1") as c:
         yield c
+
+
+@pytest_asyncio.fixture
+async def worker():
+    from app.jobs.worker import Worker
+
+    return Worker("test-worker")

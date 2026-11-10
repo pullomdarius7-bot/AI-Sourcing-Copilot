@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import get_settings
 from app.db import engine
 from app.errors import ApiError
-from app.routers import auth, health, team
+from app.routers import auth, documents, health, jobs, team
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -88,3 +88,5 @@ async def unhandled_error_handler(_: Request, exc: Exception):
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
+app.include_router(documents.router, prefix="/api/v1")
+app.include_router(jobs.router, prefix="/api/v1")

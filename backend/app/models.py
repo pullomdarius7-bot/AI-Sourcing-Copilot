@@ -152,3 +152,91 @@ class AuditLog(TenantMixin, Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = _created()
+
+
+class Document(TenantMixin, Base):
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = _pk()
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_backend: Mapped[str | None] = mapped_column(String(20))
+    storage_key: Mapped[str | None] = mapped_column(String(300))
+    # uploaded | scanning | extracting | analyzing | processed | quarantined | failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploaded")
+    scan_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    scan_engine: Mapped[str | None] = mapped_column(String(60))
+    scan_detail: Mapped[str | None] = mapped_column(String(200))
+    # pending | succeeded | needs_review | skipped | failed
+    analysis_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    file_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    extracted_text: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentExtraction(TenantMixin, Base):
+    __tablename__ = "document_extractions"
+
+    id: Mapped[uuid.UUID] = _pk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _created()
+
+
+class AiAuditLog(TenantMixin, Base):
+    __tablename__ = "ai_audit_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(60), nullable=False)
+    # ok | invalid_output | provider_error | skipped
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_sha256: Mapped[str | None] = mapped_column(String(64))
+    input_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = _created()
+
+
+class Job(TenantMixin, Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[uuid.UUID] = _pk()
+    queue: Mapped[str] = mapped_column(String(40), nullable=False, default="default")
+    kind: Mapped[str] = mapped_column(String(60), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    # queued | running | succeeded | dead
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    run_at: Mapped[datetime] = _created()
+    locked_by: Mapped[str | None] = mapped_column(String(80))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = _created()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

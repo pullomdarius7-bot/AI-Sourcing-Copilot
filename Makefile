@@ -32,6 +32,9 @@ lint:
 db-shell:
 	$(COMPOSE) exec db sh -c 'psql -U $$POSTGRES_USER -d $$POSTGRES_DB'
 
+workers:         ## Scale background workers, e.g. make workers N=3
+	$(COMPOSE) up -d --scale worker=$${N:-2} worker
+
 smoke:           ## End-to-end check through the frontend proxy
 	./scripts/smoke.sh
 
