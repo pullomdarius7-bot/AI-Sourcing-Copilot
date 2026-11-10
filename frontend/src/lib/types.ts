@@ -276,3 +276,292 @@ export interface QueueItem {
   grounding_status: string;
   source_quote: string | null;
 }
+
+// --- Suppliers ----------------------------------------------------------------------------------------------
+export type SupplierStatus = "prospect" | "under_review" | "qualified" | "disqualified" | "blocked";
+
+export interface SupplierCategory {
+  id: string;
+  name: string;
+  slug: string;
+  parent_id: string | null;
+  description: string | null;
+  supplier_count: number;
+}
+
+export interface SupplierContact {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  role: string | null;
+  is_primary: boolean;
+}
+
+export interface QualificationSummary {
+  score: number;
+  ready: boolean;
+  missing_required: string[];
+  expired: string[];
+  qualified: boolean;
+}
+
+export interface SupplierListItem {
+  id: string;
+  code: string;
+  name: string;
+  status: SupplierStatus;
+  country: string | null;
+  categories: string[];
+  contact_count: number;
+  qualification: QualificationSummary;
+}
+
+export interface Supplier {
+  id: string;
+  code: string;
+  name: string;
+  legal_name: string | null;
+  status: SupplierStatus;
+  country: string | null;
+  website: string | null;
+  tax_id: string | null;
+  address: string | null;
+  notes: string | null;
+  payment_terms: string | null;
+  currency: string | null;
+  typical_lead_time_days: number | null;
+  tags: string[];
+  categories: SupplierCategory[];
+  contacts: SupplierContact[];
+  qualification: QualificationSummary;
+  submitted_by: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  status_note: string | null;
+  created_at: string;
+}
+
+export interface Criterion {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  required: boolean;
+  weight: number;
+  active: boolean;
+}
+
+export interface QualificationCheck {
+  criterion: Criterion;
+  status: "pending" | "passed" | "failed" | "waived";
+  effective_status: "pending" | "passed" | "failed" | "waived" | "expired";
+  note: string | null;
+  expires_at: string | null;
+  checked_by: string | null;
+  checked_at: string | null;
+}
+
+export interface Qualification {
+  supplier_id: string;
+  status: SupplierStatus;
+  summary: QualificationSummary;
+  checks: QualificationCheck[];
+}
+
+export interface DomainEvent {
+  id: number;
+  action: string;
+  actor_email: string | null;
+  from_state: string | null;
+  to_state: string | null;
+  data: Record<string, unknown> | null;
+  note: string | null;
+  created_at: string;
+}
+
+// --- RFQs ----------------------------------------------------------------------------------------------------
+export type RfqStatus = "draft" | "pending_approval" | "approved" | "sent" | "closed" | "awarded" | "cancelled";
+
+export interface RfqParam {
+  name: string;
+  value: string | number | null;
+  unit: string | null;
+  qualifier: string | null;
+  unknown: boolean;
+}
+
+export interface RfqItem {
+  id: string;
+  position: number;
+  line: number;
+  kind: string;
+  statement: string;
+  category: string;
+  priority: string;
+  quantity: number | null;
+  unit: string | null;
+  parameters: RfqParam[];
+  source_requirement_id: string | null;
+}
+
+export interface RfqSupplierLink {
+  supplier_id: string;
+  code: string;
+  name: string;
+  supplier_status: SupplierStatus;
+  qualified: boolean;
+  contact_count: number;
+  status: "invited" | "sending" | "sent" | "failed" | "quoted" | "declined";
+  sent_at: string | null;
+}
+
+export interface RfqListItem {
+  id: string;
+  number: string;
+  title: string;
+  status: RfqStatus;
+  version: number;
+  currency: string;
+  response_due_date: string | null;
+  supplier_count: number;
+  quote_count: number;
+  created_at: string;
+}
+
+export interface Rfq {
+  id: string;
+  number: string;
+  title: string;
+  status: RfqStatus;
+  version: number;
+  currency: string;
+  response_due_date: string | null;
+  message: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  source_run_id: string | null;
+  content_sha256: string | null;
+  created_by: string | null;
+  submitted_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  sent_at: string | null;
+  decision_note: string | null;
+  awarded_supplier_id: string | null;
+  award_comparison_id: string | null;
+  awarded_at: string | null;
+  award_note: string | null;
+  created_at: string;
+  items: RfqItem[];
+  suppliers: RfqSupplierLink[];
+  readiness: string[];
+}
+
+export interface RfqPackage {
+  id: string;
+  supplier_id: string;
+  supplier_name: string;
+  rfq_version: number;
+  subject: string;
+  to_addresses: string[];
+  sha256: string;
+  size_bytes: number;
+  send_status: "not_sent" | "queued" | "sent" | "failed";
+  sent_at: string | null;
+  send_error: string | null;
+  created_at: string;
+}
+
+export interface QuoteLine {
+  id: string;
+  position: number;
+  rfq_item_id: string | null;
+  match_status: "unmatched" | "suggested" | "confirmed";
+  match_score: number;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  total_price: number | null;
+  lead_time_days: number | null;
+  confidence: number;
+  source_quote: string | null;
+}
+
+export interface Quote {
+  id: string;
+  supplier_id: string;
+  supplier_name: string;
+  document_id: string | null;
+  source: "analysis" | "manual";
+  status: "draft" | "verified";
+  currency: string | null;
+  incoterms: string | null;
+  payment_terms: string | null;
+  valid_until: string | null;
+  notes: string | null;
+  verified_at: string | null;
+  lines: QuoteLine[];
+}
+
+export interface CriterionScore {
+  score: number | null;
+  value: unknown;
+}
+
+export interface RankingRow {
+  rank: number;
+  supplier_id: string;
+  supplier_name: string;
+  supplier_code: string;
+  score: number;
+  criteria: { price: CriterionScore; lead_time: CriterionScore; coverage: CriterionScore; qualification: CriterionScore };
+  basket_total: number | null;
+  lead_time_days: number | null;
+  coverage: number;
+  qualified: boolean;
+  incoterms: string | null;
+  payment_terms: string | null;
+  valid_until: string | null;
+  flags: string[];
+  explanation: string[];
+}
+
+export interface ComparisonCell {
+  unit_price: number | null;
+  comparable_total: number | null;
+  lead_time_days: number | null;
+  flags: string[];
+}
+
+export interface ComparisonResult {
+  currency: string;
+  as_of: string;
+  weights: Record<string, number>;
+  active_weights: Record<string, number>;
+  basket_item_ids: string[];
+  items: { item_id: string; line: number; statement: string; quantity: number | null; unit: string | null; cells: Record<string, ComparisonCell> }[];
+  ranking: RankingRow[];
+  excluded: { supplier_id: string; supplier_name: string; reason: string; detail: string }[];
+  global_flags: string[];
+  highest_score_supplier_id: string | null;
+  decision_note: string;
+}
+
+export interface ComparisonRecord {
+  id: string;
+  created_at: string;
+  params: Record<string, unknown>;
+  inputs_sha256: string;
+  stale: boolean;
+  result: ComparisonResult;
+}
+
+export interface ComparisonBrief {
+  id: string;
+  created_at: string;
+  weights: Record<string, number>;
+  highest_score_supplier_id: string | null;
+  stale: boolean;
+}

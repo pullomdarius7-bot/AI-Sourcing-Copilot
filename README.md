@@ -108,3 +108,52 @@ Roles: everyone reads; requester, buyer and admin start extractions; buyer, appr
 admin approve; auditor is read-only. Assumptions: evidence offsets refer to the document's extracted text (scanned
 images without a text layer cannot be grounded and yield no requirements); bulk verification is limited to values
 that are grounded, unflagged and at least 85% confident; the model's parameter vocabulary is open (snake_case names).
+
+## Sprint 4: suppliers, RFQs and comparison
+
+No new services. RFQ packages are built by the API and sent by the existing workers (`rfq.send_package` jobs) through
+the configured SMTP server (Mailpit by default, so nothing leaves the host until you point SMTP_* at a real relay).
+
+**Supplier database.** Profiles (code `SUP-0001`, legal and commercial details, tags), categories with sub-categories,
+contacts with exactly one primary, CSV export (formula-injection safe), and a full history per supplier.
+
+**Qualification.** Each organization gets a default checklist (quality certification, sanctions screening, code of
+conduct are required; insurance, financial stability and references are scored). Buyers record checks with notes and
+expiry dates; only approvers can waive, with a written reason. A supplier is qualified only after an approver, who
+did not submit it, signs off with every required check passed or waived. Expired evidence or a failed required check
+makes a supplier stop counting as qualified immediately, and recording a failed required check sends it back to review.
+
+**RFQ generation and approval.** An RFQ (`RFQ-2026-0001`) is created blank or from an approved requirement extraction:
+rejected items are dropped, verified quantities become line quantities, and values the document did not state are
+sent to suppliers as explicit questions, never filled in. Draft -> submit -> approve -> send. Submitting freezes a
+SHA-256 of exactly what will be sent and to whom; the approver must not be the creator or submitter, every invited
+supplier must be qualified at submit, approve and send time, and the database refuses `sent` without an approval.
+Approvers can return an RFQ to draft (new version) with a reason.
+
+**Email packages.** One RFC 5322 message per supplier (primary contact in To, others in Cc, the sender as Reply-To)
+with the RFQ PDF and a machine-readable JSON attached, stored in MinIO/local storage and downloadable as `.eml` for
+manual sending. The send job checks the package's SHA-256 and its binding to the approved content before sending, so
+a modified package is never sent. Failures retry, then dead-letter and can be re-sent.
+
+**Exports.** RFQ PDF (watermarked DRAFT until approved, content fingerprint in the footer) and JSON; comparison PDF
+and Excel; supplier CSV. Every export is in the audit log.
+
+**Quotes and comparison.** Quotes are entered by hand or created from an analysed quote document (only grounded values
+are copied; unknowns stay empty). Quote lines are matched to RFQ lines by suggestion, and a person confirms each match
+and verifies the quote. The comparison engine scores verified quotes on price (on the basket of lines every supplier
+priced), lead time, coverage (mandatory lines count double) and qualification, with adjustable weights and a written
+explanation for every score. It never converts currencies or units, never fills gaps (an unknown lead time scores 0
+and says so), flags abnormally low prices, arithmetic mismatches, differing Incoterms, expired or incomplete quotes
+and near-ties, and lists suppliers it did not score with the reason. Comparisons are stored immutably with a
+fingerprint of their inputs.
+
+**Award.** The engine ranks; a person decides. An approver (not the RFQ's creator) awards a ranked, currently
+qualified supplier against a comparison that is still current, with a written reason. Choosing someone other than the
+top score is allowed and recorded as such. The database refuses an `awarded` RFQ without supplier, approver,
+comparison and reason.
+
+Roles: everyone reads; buyers manage suppliers, RFQs and quotes and run comparisons; approvers qualify suppliers,
+approve RFQs, run comparisons and award; admins can do everything; auditors read and export.
+
+Assumptions: one quote per supplier per RFQ (revisions edit it, with history); no FX or unit conversion is ever
+assumed; RFQ due dates are calendar dates; the sender address is EMAIL_FROM for all organizations on one deployment.

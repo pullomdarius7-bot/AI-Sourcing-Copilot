@@ -26,6 +26,31 @@ def _send_smtp(to: str, subject: str, body: str) -> None:
         smtp.send_message(msg)
 
 
+def _send_smtp_message(msg: EmailMessage) -> None:
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
+        if settings.smtp_starttls:
+            smtp.starttls()
+        if settings.smtp_user:
+            smtp.login(settings.smtp_user, settings.smtp_password or "")
+        smtp.send_message(msg)
+
+
+async def send_message(msg: EmailMessage) -> None:
+    """Deliver a fully prepared message (attachments included). Raises on failure so a job can retry."""
+    if settings.email_backend == "memory":
+        body = msg.get_body(preferencelist=("plain",))
+        outbox.append({
+            "to": str(msg["To"]), "subject": str(msg["Subject"]),
+            "body": body.get_content() if body else "",
+            "attachments": ",".join(part.get_filename() or "" for part in msg.iter_attachments()),
+            "message_id": str(msg["Message-ID"]),
+        })
+    elif settings.email_backend == "console":
+        logger.info("EMAIL to=%s subject=%s attachments=%d", msg["To"], msg["Subject"], len(list(msg.iter_attachments())))
+    else:
+        await asyncio.to_thread(_send_smtp_message, msg)
+
+
 async def send_email(to: str, subject: str, body: str) -> None:
     """Never raises: a mail outage must not break the request that triggered the mail."""
     try:

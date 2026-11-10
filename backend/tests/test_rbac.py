@@ -10,25 +10,21 @@ ROLES = [r.value for r in Role]
 
 def test_permission_matrix():
     assert set(ROLE_PERMISSIONS[Role.ADMIN]) == set(Permission)
-    assert has_permission("auditor", Permission.AUDIT_READ)
-    assert has_permission("auditor", Permission.USERS_READ)
-    assert not has_permission("auditor", Permission.USERS_MANAGE)
-    assert permissions_for("requester") == [
-        "documents:read", "documents:upload", "org:read", "requirements:extract", "requirements:read",
-    ]
-    assert permissions_for("buyer") == [
-        "documents:delete", "documents:read", "documents:upload", "org:read",
-        "requirements:extract", "requirements:read", "requirements:review",
-    ]
-    assert permissions_for("approver") == [
-        "documents:read", "org:read", "requirements:approve", "requirements:read", "requirements:review",
-    ]
-    assert not has_permission("requester", Permission.REQUIREMENTS_REVIEW)
-    assert not has_permission("buyer", Permission.REQUIREMENTS_APPROVE)
-    assert not has_permission("auditor", Permission.REQUIREMENTS_EXTRACT)
-    assert has_permission("auditor", Permission.REQUIREMENTS_READ)
-    assert not has_permission("auditor", Permission.DOCUMENTS_UPLOAD)
-    assert not has_permission("buyer", Permission.JOBS_READ)
+    everyone = {"org:read", "documents:read", "requirements:read", "suppliers:read", "rfqs:read", "comparisons:read"}
+    for role in Role:
+        assert everyone <= set(permissions_for(role.value)), role
+    assert has_permission("auditor", Permission.AUDIT_READ) and has_permission("auditor", Permission.USERS_READ)
+    for perm in (Permission.USERS_MANAGE, Permission.DOCUMENTS_UPLOAD, Permission.REQUIREMENTS_EXTRACT,
+                 Permission.SUPPLIERS_MANAGE, Permission.RFQS_MANAGE, Permission.COMPARISONS_RUN):
+        assert not has_permission("auditor", perm), perm
+    assert {"documents:upload", "requirements:extract"} <= set(permissions_for("requester"))
+    for perm in (Permission.REQUIREMENTS_REVIEW, Permission.SUPPLIERS_MANAGE, Permission.RFQS_MANAGE, Permission.QUOTES_MANAGE):
+        assert not has_permission("requester", perm), perm
+    assert {"suppliers:manage", "rfqs:manage", "quotes:manage", "comparisons:run", "documents:delete"} <= set(permissions_for("buyer"))
+    for perm in (Permission.REQUIREMENTS_APPROVE, Permission.RFQS_APPROVE, Permission.SUPPLIERS_QUALIFY, Permission.JOBS_READ):
+        assert not has_permission("buyer", perm), perm
+    assert {"requirements:approve", "suppliers:qualify", "rfqs:approve", "comparisons:run"} <= set(permissions_for("approver"))
+    assert not has_permission("approver", Permission.RFQS_MANAGE) and not has_permission("approver", Permission.QUOTES_MANAGE)
     assert has_permission("admin", Permission.JOBS_MANAGE)
     assert not has_permission("nonsense", Permission.ORG_READ)
 

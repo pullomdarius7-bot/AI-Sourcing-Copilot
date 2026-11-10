@@ -4,9 +4,10 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
-    Float,
     Boolean,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Integer,
@@ -343,5 +344,268 @@ class ReviewEvent(TenantMixin, Base):
     to_state: Mapped[str | None] = mapped_column(String(24))
     before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+
+
+# --- Suppliers ---------------------------------------------------------------------------------------
+class SupplierCategory(TenantMixin, Base):
+    __tablename__ = "supplier_categories"
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_categories.id"))
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+
+
+class Supplier(TenantMixin, Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[uuid.UUID] = _pk()
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    legal_name: Mapped[str | None] = mapped_column(String(300))
+    # prospect | under_review | qualified | disqualified | blocked
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prospect")
+    country: Mapped[str | None] = mapped_column(String(2))
+    website: Mapped[str | None] = mapped_column(String(300))
+    tax_id: Mapped[str | None] = mapped_column(String(60))
+    address: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    payment_terms: Mapped[str | None] = mapped_column(String(120))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    typical_lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    tags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+
+
+class SupplierCategoryLink(TenantMixin, Base):
+    __tablename__ = "supplier_category_links"
+
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="CASCADE"), primary_key=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_categories.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class SupplierContact(TenantMixin, Base):
+    __tablename__ = "supplier_contacts"
+
+    id: Mapped[uuid.UUID] = _pk()
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(60))
+    role: Mapped[str | None] = mapped_column(String(120))
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = _created()
+
+
+class QualificationCriterion(TenantMixin, Base):
+    __tablename__ = "qualification_criteria"
+
+    id: Mapped[uuid.UUID] = _pk()
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = _created()
+
+
+class SupplierQualificationCheck(TenantMixin, Base):
+    __tablename__ = "supplier_qualification_checks"
+
+    id: Mapped[uuid.UUID] = _pk()
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    criterion_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("qualification_criteria.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")  # pending | passed | failed | waived
+    note: Mapped[str | None] = mapped_column(Text)
+    evidence_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    expires_at: Mapped[Any] = mapped_column(Date)
+    checked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# --- RFQs ---------------------------------------------------------------------------------------------
+class Rfq(TenantMixin, Base):
+    __tablename__ = "rfqs"
+
+    id: Mapped[uuid.UUID] = _pk()
+    number: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    # draft | pending_approval | approved | sent | closed | awarded | cancelled
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("extraction_runs.id"))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_categories.id"))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EUR")
+    response_due_date: Mapped[Any] = mapped_column(Date)
+    message: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    awarded_supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"))
+    award_comparison_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    awarded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    awarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    award_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+
+
+class RfqItem(TenantMixin, Base):
+    __tablename__ = "rfq_items"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, default="requirement")  # requirement | manual
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="other")
+    priority: Mapped[str] = mapped_column(String(12), nullable=False, default="unknown")
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    parameters: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    source_requirement_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class RfqSupplier(TenantMixin, Base):
+    __tablename__ = "rfq_suppliers"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
+    # invited | sending | sent | failed | quoted | declined
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="invited")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class RfqPackage(TenantMixin, Base):
+    __tablename__ = "rfq_packages"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
+    rfq_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    to_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    storage_backend: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(400), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    send_status: Mapped[str] = mapped_column(String(10), nullable=False, default="not_sent")  # not_sent | queued | sent | failed
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    send_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+
+
+class RfqQuote(TenantMixin, Base):
+    __tablename__ = "rfq_quotes"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    extraction_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")  # analysis | manual
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="draft")  # draft | verified
+    currency: Mapped[str | None] = mapped_column(String(3))
+    incoterms: Mapped[str | None] = mapped_column(String(10))
+    payment_terms: Mapped[str | None] = mapped_column(String(200))
+    valid_until: Mapped[Any] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+
+
+class RfqQuoteLine(TenantMixin, Base):
+    __tablename__ = "rfq_quote_lines"
+
+    id: Mapped[uuid.UUID] = _pk()
+    quote_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfq_quotes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rfq_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    match_status: Mapped[str] = mapped_column(String(10), nullable=False, default="unmatched")  # unmatched | suggested | confirmed
+    match_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    unit_price: Mapped[float | None] = mapped_column(Float)
+    total_price: Mapped[float | None] = mapped_column(Float)
+    lead_time_days: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    source_quote: Mapped[str | None] = mapped_column(Text)
+
+
+class Comparison(TenantMixin, Base):
+    """Immutable record of one comparison run: inputs, weights and result."""
+
+    __tablename__ = "comparisons"
+
+    id: Mapped[uuid.UUID] = _pk()
+    rfq_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    inputs_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = _created()
+
+
+class DomainEvent(TenantMixin, Base):
+    """Append-only history for suppliers, RFQs, quotes and comparisons."""
+
+    __tablename__ = "domain_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    from_state: Mapped[str | None] = mapped_column(String(24))
+    to_state: Mapped[str | None] = mapped_column(String(24))
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _created()

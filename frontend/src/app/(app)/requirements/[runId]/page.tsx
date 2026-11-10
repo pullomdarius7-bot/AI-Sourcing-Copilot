@@ -444,6 +444,17 @@ export default function EvidenceViewerPage() {
             {d.status === "approved" && (
               <Button asChild variant="outline" size="sm"><a href={`/api/extraction-runs/${d.id}/export`}>Export JSON</a></Button>
             )}
+            {d.status === "approved" && me.permissions.includes("rfqs:manage") && (
+              <Button size="sm" onClick={async () => {
+                setDecisionError(null);
+                try {
+                  const rfq = await api<{ id: string }>("rfqs", { body: { title: `RFQ: ${d.filename ?? "requirements"}`, from_run_id: d.id } });
+                  window.location.href = `/rfqs/${rfq.id}`;
+                } catch (err) {
+                  setDecisionError(errorMessage(err));
+                }
+              }}>Create RFQ</Button>
+            )}
           </div>
         </div>
         <div className="mt-3 flex items-center gap-3">

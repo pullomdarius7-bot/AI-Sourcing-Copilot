@@ -1,5 +1,4 @@
 from app.ai.providers import LLMProvider, LLMRequest, LLMResponse, ProviderError
-from tests.samples import QUOTE
 
 
 def _f(value, source, confidence=0.9):

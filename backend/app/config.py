@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     extraction_chunk_overlap: int = 600
     extraction_max_chunks: int = 8
 
+    # --- Suppliers, RFQs & comparisons ---
+    rfq_number_prefix: str = "RFQ"
+    supplier_code_prefix: str = "SUP"
+    default_currency: str = "EUR"
+    org_display_name: str = ""  # overrides the organization name on RFQ documents when set
+    comparison_outlier_ratio: float = 0.5  # a price this far below the median is flagged as an outlier
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

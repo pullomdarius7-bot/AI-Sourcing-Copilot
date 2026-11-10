@@ -190,7 +190,7 @@ async def test_list_filters_search_and_paging(client, worker):
 
 
 async def test_delete_removes_document_and_stored_file(client, worker):
-    from app.storage import get_storage
+    from app.storage import StorageError, get_storage
 
     admin = await register_admin(client)
     doc = (await upload(client, admin, "a.txt", b"to be deleted")).json()["document"]
@@ -198,7 +198,7 @@ async def test_delete_removes_document_and_stored_file(client, worker):
     assert (await client.delete(f"/documents/{doc['id']}", headers=admin.headers)).status_code == 200
     assert (await client.get(f"/documents/{doc['id']}", headers=admin.headers)).status_code == 404
     key = f"{admin.org_id}/{doc['sha256']}"
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         await get_storage().get("local", key)
     assert (await upload(client, admin, "a.txt", b"to be deleted")).status_code == 201  # no longer a duplicate
 

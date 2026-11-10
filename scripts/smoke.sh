@@ -45,6 +45,19 @@ echo "-> requirements API reachable through the proxy"
 curl -fsS -b "$JAR" "$BASE/api/extraction-runs" | grep -q '^\['
 curl -fsS -b "$JAR" "$BASE/api/review/queue" | grep -q '"total"'
 curl -fsS -b "$JAR" "$BASE/api/documents/$GOOD_ID/text" | grep -q "Smoke Metals"
+echo "-> suppliers and RFQs"
+SUP_ID=$(curl -fsS -b "$JAR" -X POST "$BASE/api/suppliers" -H 'content-type: application/json' \
+  -d "{\"name\":\"Smoke Supplier $$\",\"contacts\":[{\"name\":\"Sam\",\"email\":\"sam@smoke-supplier.test\"}]}" \
+  | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+[ -n "$SUP_ID" ] || { echo "supplier creation failed"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/suppliers/$SUP_ID/qualification" | grep -q '"quality_certification"'
+RFQ_ID=$(curl -fsS -b "$JAR" -X POST "$BASE/api/rfqs" -H 'content-type: application/json' \
+  -d '{"title":"Smoke RFQ"}' | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+[ -n "$RFQ_ID" ] || { echo "RFQ creation failed"; exit 1; }
+curl -fsS -b "$JAR" -X POST "$BASE/api/rfqs/$RFQ_ID/items" -H 'content-type: application/json' \
+  -d '{"statement":"Smoke test line","quantity":10,"unit":"pcs"}' | grep -q '"Smoke test line"'
+curl -fsS -b "$JAR" "$BASE/api/rfqs/$RFQ_ID/pdf" | head -c 5 | grep -q '%PDF-'
+curl -fsS -b "$JAR" "$BASE/api/suppliers/export" | grep -q "Smoke Supplier"
 echo "-> logout";           curl -fsS -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout" >/dev/null
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/auth/me")
 [ "$CODE" = "401" ] || { echo "expected 401 after logout, got $CODE"; exit 1; }

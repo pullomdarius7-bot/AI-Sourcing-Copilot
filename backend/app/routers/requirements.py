@@ -36,7 +36,6 @@ from app.requirements.api_schemas import (
     run_out,
 )
 from app.requirements.grounding import bucket
-from app.schemas import MessageOut
 
 router = APIRouter(tags=["requirements"])
 READ = Permission.REQUIREMENTS_READ

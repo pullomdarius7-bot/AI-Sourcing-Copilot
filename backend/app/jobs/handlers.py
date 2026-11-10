@@ -193,10 +193,79 @@ async def dead_requirements(db: AsyncSession, job: Job, error: str) -> None:
         await req_service.fail_run(db, run, error)
 
 
+SEND_PACKAGE = "rfq.send_package"
+
+
+async def handle_send_package(db: AsyncSession, job: Job) -> dict[str, Any]:
+    """Send a stored RFQ package exactly as approved: verify integrity and approval binding first."""
+    import smtplib
+
+    from sqlalchemy import select
+
+    from app.email import send_message
+    from app.events import emit_event
+    from app.models import Rfq, RfqPackage, RfqSupplier
+    from app.rfqs.package import parse_package, verify_package
+
+    pkg = await db.get(RfqPackage, uuid.UUID(job.payload["package_id"]))
+    if pkg is None:
+        raise PermanentError("The package no longer exists")
+    if pkg.send_status == "sent":
+        return {"skipped": "already sent"}
+    rfq = await db.get(Rfq, pkg.rfq_id)
+    if rfq is None or rfq.status == "cancelled":
+        raise PermanentError("The RFQ was cancelled")
+    if rfq.status not in ("sent", "closed") or pkg.rfq_version != rfq.version:
+        raise PermanentError("The package does not belong to the RFQ version that was sent")
+    if pkg.manifest.get("content_sha256") != rfq.content_sha256:
+        raise PermanentError("The package does not match the approved RFQ content")
+    try:
+        raw = await get_storage().get(pkg.storage_backend, pkg.storage_key)
+    except StorageError as exc:
+        raise RetryableError(str(exc)) from exc
+    if not verify_package(raw, pkg.sha256):
+        raise PermanentError("Package integrity check failed: the stored message was modified")
+    try:
+        await send_message(parse_package(raw))
+    except (OSError, smtplib.SMTPException) as exc:
+        raise RetryableError(f"Mail delivery failed: {exc}") from exc
+    pkg.send_status, pkg.sent_at, pkg.send_error = "sent", datetime.now(UTC), None
+    link = await db.scalar(select(RfqSupplier).where(RfqSupplier.rfq_id == rfq.id, RfqSupplier.supplier_id == pkg.supplier_id))
+    if link is not None and link.status in ("sending", "failed", "invited"):
+        link.status, link.sent_at = "sent", pkg.sent_at
+    emit_event(db, org_id=rfq.organization_id, entity_type="rfq", entity_id=rfq.id, action="package_sent", actor=None,
+               data={"package_id": str(pkg.id), "supplier_id": str(pkg.supplier_id), "to": pkg.to_addresses})
+    await db.commit()
+    return {"sent_to": pkg.to_addresses}
+
+
+async def dead_send_package(db: AsyncSession, job: Job, error: str) -> None:
+    from sqlalchemy import select
+
+    from app.events import emit_event
+    from app.models import RfqPackage, RfqSupplier
+
+    try:
+        pkg = await db.get(RfqPackage, uuid.UUID(job.payload["package_id"]))
+    except (KeyError, ValueError):
+        return
+    if pkg is None or pkg.send_status == "sent":
+        return
+    pkg.send_status, pkg.send_error = "failed", error[:2000]
+    link = await db.scalar(select(RfqSupplier).where(RfqSupplier.rfq_id == pkg.rfq_id, RfqSupplier.supplier_id == pkg.supplier_id))
+    if link is not None and link.status == "sending":
+        link.status = "failed"
+    emit_event(db, org_id=pkg.organization_id, entity_type="rfq", entity_id=pkg.rfq_id, action="package_failed", actor=None,
+               data={"package_id": str(pkg.id), "supplier_id": str(pkg.supplier_id)}, note=error[:300])
+    await db.commit()
+
+
 Handler = Callable[[AsyncSession, Job], Awaitable[dict[str, Any] | None]]
 HANDLERS: dict[str, Handler] = {
     SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze, REQUIREMENTS: handle_requirements,
+    SEND_PACKAGE: handle_send_package,
 }
 ON_DEAD: dict[str, Callable[[AsyncSession, Job, str], Awaitable[None]]] = {
     SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze, REQUIREMENTS: dead_requirements,
+    SEND_PACKAGE: dead_send_package,
 }

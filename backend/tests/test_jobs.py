@@ -18,8 +18,10 @@ from tests.samples import QUOTE
 def _restore_handlers():
     handlers, hooks = dict(HANDLERS), dict(ON_DEAD)
     yield
-    HANDLERS.clear(); HANDLERS.update(handlers)
-    ON_DEAD.clear(); ON_DEAD.update(hooks)
+    HANDLERS.clear()
+    HANDLERS.update(handlers)
+    ON_DEAD.clear()
+    ON_DEAD.update(hooks)
 
 
 async def add_job(org_id, kind="test.job", payload=None, **kw):

@@ -1,7 +1,7 @@
 import os
 import subprocess
-import tempfile
 import sys
+import tempfile
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -42,9 +42,9 @@ from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app import email as mail  # noqa: E402
 from app.ai.service import AIService, set_ai_service  # noqa: E402
-from app.storage import set_storage  # noqa: E402
 from app.main import app  # noqa: E402
 from app.ratelimit import reset_rate_limits  # noqa: E402
+from app.storage import set_storage  # noqa: E402
 
 
 async def _ensure_database() -> None:
@@ -78,7 +78,9 @@ async def clean_state(admin_engine):
     async with admin_engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE jobs, ai_audit_logs, document_extractions, documents, audit_logs, "
+                "TRUNCATE counters, domain_events, comparisons, rfq_quote_lines, rfq_quotes, rfq_packages, rfq_suppliers, rfq_items, rfqs, "
+                "supplier_qualification_checks, qualification_criteria, supplier_contacts, supplier_category_links, supplier_categories, suppliers, "
+                "review_events, parameters, requirements, extraction_runs, jobs, ai_audit_logs, document_extractions, documents, audit_logs, "
                 "mfa_recovery_codes, email_tokens, auth_sessions, invitations, users, "
                 "organizations RESTART IDENTITY CASCADE"
             )
