@@ -1,0 +1,120 @@
+name: ai-sourcing-copilot
+
+x-backend-env: &backend-env
+  ENVIRONMENT: production
+  DATABASE_URL: postgresql+asyncpg://copilot_app:${APP_DB_PASSWORD:?run ./scripts/init-env.sh first}@db:5432/${POSTGRES_DB:-copilot}
+  JWT_SECRET: ${JWT_SECRET:?run ./scripts/init-env.sh first}
+  MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?run ./scripts/init-env.sh first}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-false}
+  EMAIL_FROM: ${EMAIL_FROM:-AI Sourcing Copilot <no-reply@sourcing.local>}
+  REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-true}
+  ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+  REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-copilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./scripts/init-env.sh first}
+      POSTGRES_DB: ${POSTGRES_DB:-copilot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-copilot} -d ${POSTGRES_DB:-copilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      <<: *backend-env
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-copilot}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    environment: *backend-env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://backend:8000
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - mailpit:/data
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+
+  backend-test:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      target: test
+    environment:
+      <<: *backend-env
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      TEST_DB_HOST: db
+      TEST_DB_ADMIN_USER: ${POSTGRES_USER:-copilot}
+      TEST_DB_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  mailpit:
+  caddy_data:
