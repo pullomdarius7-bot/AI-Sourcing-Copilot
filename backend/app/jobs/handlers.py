@@ -15,7 +15,7 @@ from app.files import extract as extractor
 from app.files import scan as scanner
 from app.jobs import queue
 from app.jobs.errors import PermanentError, RetryableError
-from app.models import Document, Job
+from app.models import Document, ExtractionRun, Job
 from app.storage import StorageError, get_storage
 
 logger = logging.getLogger("app.jobs")
@@ -23,6 +23,7 @@ logger = logging.getLogger("app.jobs")
 SCAN = "document.scan"
 EXTRACT = "document.extract"
 ANALYZE = "document.analyze"
+REQUIREMENTS = "requirements.extract"
 MAX_VISION_BYTES = 5 * 1024 * 1024
 
 
@@ -167,8 +168,35 @@ async def dead_analyze(db: AsyncSession, job: Job, error: str) -> None:
     await db.commit()
 
 
+async def handle_requirements(db: AsyncSession, job: Job) -> dict[str, Any]:
+    from app.requirements import service as req_service
+
+    run = await db.get(ExtractionRun, uuid.UUID(job.payload["run_id"]))
+    if run is None:
+        raise PermanentError("The extraction run no longer exists")
+    if run.status != "extracting":
+        return {"skipped": f"run is {run.status}"}
+    doc = await db.get(Document, run.document_id)
+    if doc is None or doc.scan_status != "clean":
+        raise PermanentError("The document is unavailable or has not passed the virus scan")
+    return await req_service.execute_run(db, run, doc)
+
+
+async def dead_requirements(db: AsyncSession, job: Job, error: str) -> None:
+    from app.requirements import service as req_service
+
+    try:
+        run = await db.get(ExtractionRun, uuid.UUID(job.payload["run_id"]))
+    except (KeyError, ValueError):
+        return
+    if run is not None and run.status == "extracting":
+        await req_service.fail_run(db, run, error)
+
+
 Handler = Callable[[AsyncSession, Job], Awaitable[dict[str, Any] | None]]
-HANDLERS: dict[str, Handler] = {SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze}
+HANDLERS: dict[str, Handler] = {
+    SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze, REQUIREMENTS: handle_requirements,
+}
 ON_DEAD: dict[str, Callable[[AsyncSession, Job, str], Awaitable[None]]] = {
-    SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze,
+    SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze, REQUIREMENTS: dead_requirements,
 }

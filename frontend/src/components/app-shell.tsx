@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, FileText, LayoutDashboard, ScrollText, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, ClipboardCheck, FileText, LayoutDashboard, ListChecks, ScrollText, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -15,6 +15,8 @@ const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: null },
   { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read" },
   { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload" },
+  { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read" },
+  { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },

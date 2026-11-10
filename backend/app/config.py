@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     local_llm_url: str = ""  # Ollama base URL, e.g. http://ollama:11434
     local_llm_model: str = "llama3.1:8b"
 
+    # --- Requirement extraction & review ---
+    require_separate_approver: bool = True  # the approver may not have created or reviewed the run
+    bulk_verify_min_confidence: float = 0.85
+    extraction_chunk_chars: int = 40_000
+    extraction_chunk_overlap: int = 600
+    extraction_max_chunks: int = 8
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

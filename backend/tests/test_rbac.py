@@ -13,11 +13,20 @@ def test_permission_matrix():
     assert has_permission("auditor", Permission.AUDIT_READ)
     assert has_permission("auditor", Permission.USERS_READ)
     assert not has_permission("auditor", Permission.USERS_MANAGE)
-    assert permissions_for("requester") == ["documents:read", "documents:upload", "org:read"]
+    assert permissions_for("requester") == [
+        "documents:read", "documents:upload", "org:read", "requirements:extract", "requirements:read",
+    ]
     assert permissions_for("buyer") == [
         "documents:delete", "documents:read", "documents:upload", "org:read",
+        "requirements:extract", "requirements:read", "requirements:review",
     ]
-    assert permissions_for("approver") == ["documents:read", "org:read"]
+    assert permissions_for("approver") == [
+        "documents:read", "org:read", "requirements:approve", "requirements:read", "requirements:review",
+    ]
+    assert not has_permission("requester", Permission.REQUIREMENTS_REVIEW)
+    assert not has_permission("buyer", Permission.REQUIREMENTS_APPROVE)
+    assert not has_permission("auditor", Permission.REQUIREMENTS_EXTRACT)
+    assert has_permission("auditor", Permission.REQUIREMENTS_READ)
     assert not has_permission("auditor", Permission.DOCUMENTS_UPLOAD)
     assert not has_permission("buyer", Permission.JOBS_READ)
     assert has_permission("admin", Permission.JOBS_MANAGE)

@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import get_settings
 from app.db import engine
 from app.errors import ApiError
-from app.routers import auth, documents, health, jobs, team
+from app.routers import auth, documents, health, jobs, requirements, team
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -90,3 +90,4 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
+app.include_router(requirements.router, prefix="/api/v1")

@@ -36,6 +36,16 @@ Rules:
 - summary: at most two neutral sentences describing the document."""
 
 
+class StructuredResult:
+    def __init__(self, value, provider: str, model: str, input_tokens, output_tokens, flags: list[str]):
+        self.value = value
+        self.provider = provider
+        self.model = model
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.flags = flags
+
+
 class AnalysisOutcome:
     def __init__(self, status: str, extraction: DocumentExtraction | None = None, reason: str | None = None):
         self.status = status  # succeeded | needs_review | skipped
@@ -57,11 +67,14 @@ class AIService:
             self._providers = build_providers()
         return self._providers
 
-    async def _audit(self, db: AsyncSession, doc: Document, user_id: uuid.UUID | None, provider: LLMProvider, **fields) -> None:
+    async def _audit(
+        self, db: AsyncSession, doc: Document, user_id: uuid.UUID | None, provider: LLMProvider,
+        purpose: str = PURPOSE, **fields,
+    ) -> None:
         db.add(
             AiAuditLog(
                 organization_id=doc.organization_id, document_id=doc.id, user_id=user_id,
-                provider=provider.name, model=provider.model, purpose=PURPOSE, **fields,
+                provider=provider.name, model=provider.model, purpose=purpose, **fields,
             )
         )
         await db.commit()
@@ -145,6 +158,82 @@ class AIService:
         if retryable_seen:
             raise RetryableError(f"All AI providers failed: {last_error}")
         raise PermanentError(f"AI analysis failed: {last_error}")
+
+
+    async def structured_call(
+        self,
+        db: AsyncSession,
+        doc: Document,
+        *,
+        user_id: uuid.UUID | None,
+        purpose: str,
+        system: str,
+        schema: dict,
+        schema_name: str,
+        text: str,
+        validate,
+        instruction: str = "Return the result for the document above.",
+        max_tokens: int = 8192,
+    ) -> StructuredResult:
+        """Generic, audited, schema-forced model call with failover and one repair attempt."""
+        providers = self.providers
+        if not providers:
+            raise PermanentError("No AI provider is configured")
+        prepared = guard.prepare_text(text, settings.ai_max_input_chars)
+        retryable_seen = False
+        last_error = "no provider succeeded"
+
+        for provider in providers:
+            body_text, redaction_flags = (
+                guard.redact(prepared.text) if provider.external else (prepared.text, [])
+            )
+            nonce = secrets.token_hex(6)
+            user_prompt = (
+                f"Filename: {doc.filename}\n\n<document-{nonce}>\n{body_text}\n</document-{nonce}>\n\n{instruction}"
+            )
+            prompt_hash = _sha(system + user_prompt)
+            repair = ""
+            for _attempt in range(2):
+                request = LLMRequest(system, user_prompt + repair, schema, [], max_tokens, schema_name)
+                started = time.monotonic()
+                try:
+                    response = await provider.generate(request)
+                except ProviderError as exc:
+                    last_error = str(exc)
+                    retryable_seen = retryable_seen or exc.retryable
+                    await self._audit(
+                        db, doc, user_id, provider, purpose=purpose, status="provider_error",
+                        prompt_sha256=prompt_hash, input_chars=len(body_text),
+                        latency_ms=int((time.monotonic() - started) * 1000), error=str(exc)[:500],
+                    )
+                    break
+                latency = int((time.monotonic() - started) * 1000)
+                response_hash = _sha(json.dumps(response.data, sort_keys=True, default=str))
+                try:
+                    value = validate(response.data)
+                except guard.OutputInvalid as exc:
+                    last_error = f"invalid output: {exc.errors}"
+                    await self._audit(
+                        db, doc, user_id, provider, purpose=purpose, status="invalid_output",
+                        prompt_sha256=prompt_hash, response_sha256=response_hash, input_chars=len(body_text),
+                        latency_ms=latency, input_tokens=response.input_tokens,
+                        output_tokens=response.output_tokens, error=exc.errors[:500],
+                    )
+                    repair = f"\n\nYour previous answer was rejected: {exc.errors}\nReturn a corrected answer."
+                    continue
+                flags = prepared.flags + redaction_flags
+                await self._audit(
+                    db, doc, user_id, provider, purpose=purpose, status="ok", prompt_sha256=prompt_hash,
+                    response_sha256=response_hash, input_chars=len(body_text), latency_ms=latency,
+                    input_tokens=response.input_tokens, output_tokens=response.output_tokens, flags=flags,
+                )
+                return StructuredResult(
+                    value, provider.name, response.model, response.input_tokens, response.output_tokens, flags
+                )
+
+        if retryable_seen:
+            raise RetryableError(f"All AI providers failed: {last_error}")
+        raise PermanentError(f"AI call failed: {last_error}")
 
 
 _service: AIService | None = None

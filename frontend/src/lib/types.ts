@@ -166,3 +166,113 @@ export interface AiAuditEntry {
   error: string | null;
   created_at: string;
 }
+
+export type ValidationState = "unverified" | "verified" | "corrected" | "rejected";
+
+export interface Evidence {
+  source_quote: string | null;
+  source_start: number | null;
+  source_end: number | null;
+  source_line: number | null;
+  source_section: string | null;
+  confidence: number;
+  model_confidence: number;
+  confidence_bucket: "high" | "medium" | "low";
+  confidence_detail: Record<string, unknown>;
+  grounding_status: "grounded" | "unknown" | "manual";
+  flags: string[];
+  validation_state: ValidationState;
+  verified: boolean;
+  verified_by: string | null;
+  verified_at: string | null;
+  review_note: string | null;
+  original: Record<string, unknown> | null;
+}
+
+export interface ParameterItem extends Evidence {
+  id: string;
+  run_id: string;
+  requirement_id: string | null;
+  name: string;
+  value_type: "text" | "number";
+  value_text: string | null;
+  value_number: number | null;
+  unit: string | null;
+  qualifier: "exact" | "min" | "max" | "approx" | null;
+  unknown: boolean;
+  display_value: string | null;
+}
+
+export interface RequirementItem extends Evidence {
+  id: string;
+  run_id: string;
+  statement: string;
+  category: string;
+  priority: string;
+  parameters: ParameterItem[];
+}
+
+export interface RunCounts {
+  requirements: number;
+  parameters: number;
+  unknown: number;
+  unresolved: number;
+  verified: number;
+  corrected: number;
+  rejected: number;
+}
+
+export type RunStatus = "extracting" | "pending_review" | "ready_for_approval" | "approved" | "rejected" | "failed" | "superseded";
+
+export interface ExtractionRun {
+  id: string;
+  document_id: string;
+  filename: string | null;
+  status: RunStatus;
+  provider: string | null;
+  model: string | null;
+  flags: { code: string; [k: string]: unknown }[];
+  error: string | null;
+  created_by: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  decision_note: string | null;
+  created_at: string;
+  completed_at: string | null;
+  counts: RunCounts;
+  source_changed: boolean;
+}
+
+export interface RunDetail extends ExtractionRun {
+  requirements: RequirementItem[];
+  unknown_parameters: ParameterItem[];
+}
+
+export interface ReviewEvent {
+  id: number;
+  item_type: string;
+  item_id: string;
+  action: string;
+  actor_email: string | null;
+  from_state: string | null;
+  to_state: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface QueueItem {
+  item_type: "parameter" | "requirement";
+  id: string;
+  run_id: string;
+  document_id: string;
+  filename: string;
+  label: string;
+  value: string | null;
+  requirement_statement: string | null;
+  confidence: number;
+  confidence_bucket: "high" | "medium" | "low";
+  flags: string[];
+  validation_state: ValidationState;
+  grounding_status: string;
+  source_quote: string | null;
+}

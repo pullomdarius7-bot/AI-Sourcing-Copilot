@@ -13,7 +13,7 @@ from app.deps import Principal, require_permission
 from app.errors import ApiError, conflict, not_found
 from app.files.sniff import ALLOWED_EXTENSIONS
 from app.jobs.handlers import enqueue_pipeline
-from app.models import Document, DocumentExtraction, Job
+from app.models import Document, DocumentExtraction, ExtractionRun, Job
 from app.rbac import Permission
 from app.schemas import (
     AnalysisOut,
@@ -174,6 +174,11 @@ async def delete_document(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _get_doc(db, p, doc_id)
+    approved = await db.scalar(
+        select(func.count()).select_from(ExtractionRun).where(ExtractionRun.document_id == doc.id, ExtractionRun.status == "approved")
+    )
+    if approved:
+        raise conflict("has_approved_requirements", "This document has approved requirements and cannot be deleted")
     backend, key = doc.storage_backend, doc.storage_key
     await db.execute(
         delete(Job).where(Job.organization_id == p.org_id, Job.status == "queued", Job.payload["document_id"].astext == str(doc.id))

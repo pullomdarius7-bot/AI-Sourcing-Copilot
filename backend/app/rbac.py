@@ -21,15 +21,23 @@ class Permission(StrEnum):
     DOCUMENTS_DELETE = "documents:delete"
     JOBS_READ = "jobs:read"
     JOBS_MANAGE = "jobs:manage"
+    REQUIREMENTS_READ = "requirements:read"
+    REQUIREMENTS_EXTRACT = "requirements:extract"
+    REQUIREMENTS_REVIEW = "requirements:review"
+    REQUIREMENTS_APPROVE = "requirements:approve"
 
 
-_BASE = {Permission.ORG_READ, Permission.DOCUMENTS_READ}
-_UPLOAD = {Permission.DOCUMENTS_UPLOAD}
+_BASE = {Permission.ORG_READ, Permission.DOCUMENTS_READ, Permission.REQUIREMENTS_READ}
+_UPLOAD = {Permission.DOCUMENTS_UPLOAD, Permission.REQUIREMENTS_EXTRACT}
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.REQUESTER: frozenset(_BASE | _UPLOAD),
-    Role.BUYER: frozenset(_BASE | _UPLOAD | {Permission.DOCUMENTS_DELETE}),
-    Role.APPROVER: frozenset(_BASE),
+    Role.BUYER: frozenset(
+        _BASE | _UPLOAD | {Permission.DOCUMENTS_DELETE, Permission.REQUIREMENTS_REVIEW}
+    ),
+    Role.APPROVER: frozenset(
+        _BASE | {Permission.REQUIREMENTS_REVIEW, Permission.REQUIREMENTS_APPROVE}
+    ),
     Role.AUDITOR: frozenset(_BASE | {Permission.USERS_READ, Permission.AUDIT_READ}),
     Role.ADMIN: frozenset(Permission),
 }

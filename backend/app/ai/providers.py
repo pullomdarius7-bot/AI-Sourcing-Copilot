@@ -24,6 +24,7 @@ class LLMRequest:
     schema: dict[str, Any]
     images: list[tuple[str, bytes]] = field(default_factory=list)  # (mime type, bytes)
     max_tokens: int = 4096
+    schema_name: str = ANALYSIS_SCHEMA_NAME
 
 
 @dataclass
@@ -96,11 +97,11 @@ class AnthropicProvider(LLMProvider):
             "system": request.system,
             "messages": [{"role": "user", "content": content}],
             "tools": [{
-                "name": ANALYSIS_SCHEMA_NAME,
-                "description": "Record the structured analysis of the document.",
+                "name": request.schema_name,
+                "description": "Record the structured result for the document.",
                 "input_schema": request.schema,
             }],
-            "tool_choice": {"type": "tool", "name": ANALYSIS_SCHEMA_NAME},
+            "tool_choice": {"type": "tool", "name": request.schema_name},
         }
         data = await self._post(
             f"{self.base_url}/v1/messages",
@@ -110,7 +111,7 @@ class AnthropicProvider(LLMProvider):
         if data.get("stop_reason") == "max_tokens":
             raise ProviderError("anthropic output was truncated", retryable=False)
         for block in data.get("content", []):
-            if block.get("type") == "tool_use" and block.get("name") == ANALYSIS_SCHEMA_NAME:
+            if block.get("type") == "tool_use" and block.get("name") == request.schema_name:
                 usage = data.get("usage", {})
                 return LLMResponse(
                     block.get("input"), data.get("model", self.model),
@@ -145,7 +146,7 @@ class OpenAIProvider(LLMProvider):
             ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": ANALYSIS_SCHEMA_NAME, "strict": True, "schema": request.schema},
+                "json_schema": {"name": request.schema_name, "strict": True, "schema": request.schema},
             },
         }
         data = await self._post(

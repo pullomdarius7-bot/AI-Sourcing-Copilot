@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Float,
     Boolean,
     DateTime,
     ForeignKey,
@@ -240,3 +241,107 @@ class Job(TenantMixin, Base):
     created_at: Mapped[datetime] = _created()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExtractionRun(TenantMixin, Base):
+    __tablename__ = "extraction_runs"
+
+    id: Mapped[uuid.UUID] = _pk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # extracting | pending_review | ready_for_approval | approved | rejected | failed | superseded
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="extracting")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    provider: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    prompt_version: Mapped[str | None] = mapped_column(String(20))
+    source_text_sha256: Mapped[str | None] = mapped_column(String(64))
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EvidenceMixin:
+    """Every extracted item carries a source reference, a confidence and a validation state."""
+
+    source_quote: Mapped[str | None] = mapped_column(Text)
+    source_start: Mapped[int | None] = mapped_column(Integer)
+    source_end: Mapped[int | None] = mapped_column(Integer)
+    source_line: Mapped[int | None] = mapped_column(Integer)
+    source_section: Mapped[str | None] = mapped_column(String(200))
+    model_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # grounded (quote located in the document) | unknown (nothing stated) | manual (human-supplied evidence)
+    grounding_status: Mapped[str] = mapped_column(String(12), nullable=False, default="grounded")
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    # unverified | verified | corrected | rejected
+    validation_state: Mapped[str] = mapped_column(String(12), nullable=False, default="unverified")
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    original: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+
+
+class Requirement(EvidenceMixin, TenantMixin, Base):
+    __tablename__ = "requirements"
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="other")
+    priority: Mapped[str] = mapped_column(String(12), nullable=False, default="unknown")
+
+
+class Parameter(EvidenceMixin, TenantMixin, Base):
+    __tablename__ = "parameters"
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requirement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("requirements.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    value_type: Mapped[str] = mapped_column(String(8), nullable=False, default="text")
+    value_text: Mapped[str | None] = mapped_column(Text)
+    value_number: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    qualifier: Mapped[str | None] = mapped_column(String(8))
+    unknown: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class ReviewEvent(TenantMixin, Base):
+    """Append-only history of everything that happens to an extraction run and its items."""
+
+    __tablename__ = "review_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    item_type: Mapped[str] = mapped_column(String(12), nullable=False)  # run | requirement | parameter
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    from_state: Mapped[str | None] = mapped_column(String(24))
+    to_state: Mapped[str | None] = mapped_column(String(24))
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()

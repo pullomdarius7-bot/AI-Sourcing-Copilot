@@ -41,6 +41,10 @@ wait_for "$BAD_ID" quarantined "${DOC_TIMEOUT:-900}"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/documents/$BAD_ID/download")
 [ "$CODE" = "409" ] || { echo "infected download should be blocked, got $CODE"; exit 1; }
 curl -fsS -b "$JAR" "$BASE/api/documents/$GOOD_ID/download" | grep -q "Smoke Metals"
+echo "-> requirements API reachable through the proxy"
+curl -fsS -b "$JAR" "$BASE/api/extraction-runs" | grep -q '^\['
+curl -fsS -b "$JAR" "$BASE/api/review/queue" | grep -q '"total"'
+curl -fsS -b "$JAR" "$BASE/api/documents/$GOOD_ID/text" | grep -q "Smoke Metals"
 echo "-> logout";           curl -fsS -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout" >/dev/null
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/auth/me")
 [ "$CODE" = "401" ] || { echo "expected 401 after logout, got $CODE"; exit 1; }

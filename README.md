@@ -73,3 +73,38 @@ Pipeline (each step is its own retryable job): upload -> `document.scan` -> `doc
 Assumptions: documents are visible to every member of the organization; the app uses the MinIO root credentials
 (create a dedicated service account for stricter setups); duplicate detection is exact-content (SHA-256) per
 organization; scanned images/PDFs without text are analyzed only by vision-capable models (no OCR engine is bundled).
+
+## Sprint 3: requirement extraction and human verification
+
+No new services: extraction runs as a `requirements.extract` job on the existing workers and needs at least one AI
+provider (a self-hosted model works). Start it from a document's page, then review in **Requirements** and the
+**Review queue**.
+
+Rules enforced in code, not by prompting:
+
+- **No hallucination.** A model's answer is checked against the document. A value is kept only if its source quote
+  is found in the document text, the value appears inside that quote, any unit appears in it, and a stated priority
+  (mandatory/preferred/optional) is backed by words like shall/should/may. A paraphrased requirement statement is
+  replaced by the verbatim quote if its words and numbers are not in the source. Everything else is dropped or turned
+  into an explicit unknown; the discarded claim is kept in `confidence_detail` for audit but never shown as a value.
+- **Unknown stays unknown.** Missing parameters are stored as `unknown` with no value, no source and confidence 0.
+  The database refuses an unknown parameter that carries a value (`ck_parameters_unknown_has_no_value`) and a
+  known machine-extracted value without a source quote (`ck_parameters_known_has_source`).
+- **Every item has a source reference, a confidence and a validation state.** The source is the quote plus its
+  character offsets, line and sheet in the document text (the evidence viewer highlights it). Confidence is the model's
+  own score multiplied by deterministic factors (exact vs normalised match, hedged wording such as "approximately",
+  very short or very long quotes, unit missing from the quote, parameter outside its requirement's quote) and capped
+  at 0.5 when the document contradicts itself (for example two different Incoterms). Validation state is
+  `unverified`, `verified`, `corrected` or `rejected`; only people change it.
+- **Corrections need evidence.** A reviewer's correction must quote the document (re-checked by the same rules) or give
+  "other evidence" with an explanation; both are recorded with the machine's original value, which "Undo review" restores.
+- **Four-eyes approval.** An extraction can be approved only when every item is resolved, by an approver who neither
+  started it nor reviewed any of its items (`REQUIRE_SEPARATE_APPROVER`). Approval locks it; approved extractions
+  protect their document from deletion and can be exported as JSON (rejected items excluded, unknowns preserved).
+- **Audit.** Each action is written to the organization audit log and to an append-only `review_events` history with
+  before/after snapshots; every model call is in `ai_audit_logs`.
+
+Roles: everyone reads; requester, buyer and admin start extractions; buyer, approver and admin review; approver and
+admin approve; auditor is read-only. Assumptions: evidence offsets refer to the document's extracted text (scanned
+images without a text layer cannot be grounded and yield no requirements); bulk verification is limited to values
+that are grounded, unflagged and at least 85% confident; the model's parameter vocabulary is open (snake_case names).

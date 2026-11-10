@@ -11,7 +11,8 @@ import { AnalysisBadge, StatusBadge } from "@/components/status-badge";
 import { useMe } from "@/components/me-context";
 import { api, errorMessage, useFetch } from "@/lib/api";
 import { ACTIVE_STATUSES, formatBytes, pipelineSteps, type StepState } from "@/lib/docs";
-import type { Analysis, DocumentDetail, Field } from "@/lib/types";
+import type { Analysis, DocumentDetail, ExtractionRun, Field } from "@/lib/types";
+import { RunStatusBadge } from "@/components/review-badges";
 import { cn, formatDate } from "@/lib/utils";
 
 const STEP_STYLE: Record<StepState, string> = {
@@ -139,13 +140,19 @@ export default function DocumentPage() {
   const analysisPath = doc && doc.analysis_status !== "pending" && doc.analysis_status !== "skipped" && doc.status !== "quarantined" ? `documents/${id}/analysis` : null;
   const { data: analysis } = useFetch<Analysis>(analysisPath);
   const [actionError, setActionError] = useState<string | null>(null);
+  const runs = useFetch<ExtractionRun[]>(`extraction-runs?document_id=${id}&limit=5`);
+  const latestRun = runs.data?.[0];
 
   const active = doc ? ACTIVE_STATUSES.includes(doc.status) : false;
+  const extracting = latestRun?.status === "extracting";
   useEffect(() => {
-    if (!active) return;
-    const t = setInterval(reload, 2500);
+    if (!active && !extracting) return;
+    const t = setInterval(() => {
+      reload();
+      runs.reload();
+    }, 2500);
     return () => clearInterval(t);
-  }, [active, reload]);
+  }, [active, extracting, reload, runs.reload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function act(fn: () => Promise<void>) {
     setActionError(null);
@@ -244,6 +251,44 @@ export default function DocumentPage() {
       </Card>
 
       {analysis && <AnalysisCard analysis={analysis} />}
+
+      {doc.scan_status === "clean" && doc.text_preview && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>Requirements</CardTitle>
+              {latestRun && <RunStatusBadge status={latestRun.status} />}
+            </div>
+            <CardDescription>
+              Extract the requirements and their parameters. Every value is tied to a quote in this document, shows how
+              confident the check is, and stays unverified until a person reviews it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {latestRun && (
+              <p className="text-sm text-muted-foreground">
+                Latest extraction: {latestRun.counts.requirements} requirements, {latestRun.counts.parameters} parameters,{" "}
+                {latestRun.counts.unresolved} awaiting review.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {latestRun && (
+                <Button asChild variant="outline">
+                  <Link href={`/requirements/${latestRun.id}`}>Open in evidence viewer</Link>
+                </Button>
+              )}
+              {me.permissions.includes("requirements:extract") && (
+                <Button
+                  disabled={extracting}
+                  onClick={() => act(async () => { await api(`documents/${doc.id}/requirements/extract`, { method: "POST" }); runs.reload(); })}
+                >
+                  {extracting ? "Extracting…" : latestRun ? "Extract again" : "Extract requirements"}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card>

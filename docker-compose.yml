@@ -30,6 +30,10 @@ x-backend-env: &backend-env
   # Job workers
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
   JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  # Requirement extraction & review
+  REQUIRE_SEPARATE_APPROVER: ${REQUIRE_SEPARATE_APPROVER:-true}
+  BULK_VERIFY_MIN_CONFIDENCE: ${BULK_VERIFY_MIN_CONFIDENCE:-0.85}
+  EXTRACTION_CHUNK_CHARS: ${EXTRACTION_CHUNK_CHARS:-40000}
   # AI providers (all optional; order = preference, unconfigured providers are skipped)
   AI_PROVIDER_ORDER: ${AI_PROVIDER_ORDER:-local,anthropic,openai}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
