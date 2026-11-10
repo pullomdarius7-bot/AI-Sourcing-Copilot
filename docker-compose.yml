@@ -52,6 +52,13 @@ x-backend-env: &backend-env
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
   LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
   LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.1:8b}
+  # Sourcing assistant (works without any model: deterministic mode)
+  AGENT_MODE: ${AGENT_MODE:-auto}
+  AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-4}
+  AGENT_RATE_PER_MINUTE: ${AGENT_RATE_PER_MINUTE:-20}
+  AGENT_INDEX_ON_DEMAND_DOCS: ${AGENT_INDEX_ON_DEMAND_DOCS:-20}
+  # Monitoring: bearer token Prometheus uses for /metrics
+  METRICS_TOKEN: ${METRICS_TOKEN:?run make env-upgrade (existing install) or make init}
 
 x-backend-volumes: &backend-volumes
   - uploads:/data/uploads
@@ -187,6 +194,49 @@ services:
     depends_on:
       - frontend
 
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        printf '%s' "$$METRICS_TOKEN" > /tmp/metrics_token &&
+        exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=$${PROMETHEUS_RETENTION:-15d} --web.enable-lifecycle
+    environment:
+      METRICS_TOKEN: ${METRICS_TOKEN}
+      PROMETHEUS_RETENTION: ${PROMETHEUS_RETENTION:-15d}
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make env-upgrade (existing install) or make init}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/copilot.json
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
   backend-test:
     profiles: ["test"]
     build:
@@ -210,3 +260,5 @@ volumes:
   minio_data:
   clamav_data:
   ollama_data:
+  prometheus_data:
+  grafana_data:

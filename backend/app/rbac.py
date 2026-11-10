@@ -35,11 +35,13 @@ class Permission(StrEnum):
     COMPARISONS_READ = "comparisons:read"
     COMPARISONS_RUN = "comparisons:run"
     REFERENCE_MANAGE = "reference:manage"  # exchange rates and unit conversion rules
+    AGENT_USE = "agent:use"  # ask the sourcing agent (answers only from data the user may read)
+    AGENT_AUDIT = "agent:audit"  # read every agent run in the organization
 
 
 _BASE = {
     Permission.ORG_READ, Permission.DOCUMENTS_READ, Permission.REQUIREMENTS_READ,
-    Permission.SUPPLIERS_READ, Permission.RFQS_READ, Permission.COMPARISONS_READ,
+    Permission.SUPPLIERS_READ, Permission.RFQS_READ, Permission.COMPARISONS_READ, Permission.AGENT_USE,
 }
 _UPLOAD = {Permission.DOCUMENTS_UPLOAD, Permission.REQUIREMENTS_EXTRACT}
 
@@ -57,7 +59,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RFQS_APPROVE, Permission.COMPARISONS_RUN, Permission.REFERENCE_MANAGE,
         }
     ),
-    Role.AUDITOR: frozenset(_BASE | {Permission.USERS_READ, Permission.AUDIT_READ}),
+    Role.AUDITOR: frozenset(_BASE | {Permission.USERS_READ, Permission.AUDIT_READ, Permission.AGENT_AUDIT}),
     Role.ADMIN: frozenset(Permission),
 }
 

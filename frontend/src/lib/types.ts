@@ -674,3 +674,121 @@ export interface QuoteImportResult {
   columns: Record<string, string>;
   currency_detected: string | null;
 }
+
+// --- Sourcing assistant ---------------------------------------------------------------------------------------
+export interface AgentSource {
+  id: string;
+  kind: "rfq" | "supplier" | "document" | "comparison" | "analysis" | "quote" | "glossary" | "method" | "report" | "requirements" | "queue";
+  title: string;
+  path: string | null;
+  ref: string | null;
+  as_of: string | null;
+  excerpt: string;
+  sha256: string;
+}
+
+export interface AgentBlock {
+  type: "text" | "heading";
+  text: string;
+  sources: string[];
+}
+
+export interface AgentRunBrief {
+  id: string;
+  mode: "deterministic" | "llm";
+  status: "answered" | "fallback" | "refused" | "clarify" | "error";
+  intent: string | null;
+  provider: string | null;
+  model: string | null;
+  prompt_version: string;
+  latency_ms: number;
+  tools: { tool: string; status: string; ms: number; error?: string | null }[];
+  flags: string[];
+  model_output_rejected: string | null;
+}
+
+export interface AgentMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  blocks: AgentBlock[];
+  unknowns: string[];
+  follow_ups: string[];
+  sources: AgentSource[];
+  run: AgentRunBrief | null;
+  feedback: number | null;
+  created_at: string;
+}
+
+export interface AgentConversation {
+  id: string;
+  title: string;
+  archived: boolean;
+  context: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentConversationDetail extends AgentConversation {
+  messages: AgentMessage[];
+}
+
+export interface AgentTurn {
+  conversation: AgentConversation;
+  user: AgentMessage;
+  assistant: AgentMessage;
+}
+
+export interface AgentStatus {
+  mode: "deterministic" | "llm";
+  configured_mode: string;
+  providers: string[];
+  prompt_version: string;
+  prompt_sha256: string;
+  glossary_version: string;
+  tools: { name: string; description: string }[];
+  indexed_documents: number;
+  unindexed_documents: number;
+}
+
+export interface AgentRun {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  user_email: string | null;
+  question: string;
+  mode: string;
+  status: string;
+  intent: string | null;
+  prompt_version: string;
+  prompt_sha256: string;
+  provider: string | null;
+  model: string | null;
+  plan: { tool: string; args: Record<string, unknown>; by: string }[];
+  tool_calls: { tool: string; args: Record<string, unknown>; status: string; ms: number; error?: string; sources?: string[]; summary?: Record<string, unknown> }[];
+  llm_calls: { purpose: string; provider: string; model: string; status: string; ms: number; input_tokens?: number; output_tokens?: number; error?: string; prompt_sha256: string; response_sha256?: string; redacted: boolean }[];
+  safety: { flags?: string[]; problems?: string[]; model_output_rejected?: string; reports?: string[] };
+  source_ids: string[];
+  answer_sha256: string | null;
+  latency_ms: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  error: string | null;
+  created_at: string;
+  answer: AgentMessage | null;
+}
+
+export interface AgentReport {
+  id: string;
+  kind: string;
+  title: string;
+  subject_id: string | null;
+  run_id: string | null;
+  conversation_id: string | null;
+  blocks: AgentBlock[];
+  unknowns: string[];
+  sources: AgentSource[];
+  content_sha256: string;
+  created_by: string | null;
+  created_at: string;
+}

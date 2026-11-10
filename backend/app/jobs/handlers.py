@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.retrieval import index_document
 from app.ai.service import get_ai_service
 from app.audit import record
 from app.db import set_tenant
@@ -128,9 +129,10 @@ async def handle_analyze(db: AsyncSession, job: Job) -> dict[str, Any]:
         doc.file_metadata = {**doc.file_metadata, "analysis_skipped_reason": outcome.reason}
     doc.status, doc.error = "processed", None
     doc.processed_at = doc.updated_at = _now()
+    passages = await index_document(db, doc)  # searchable by the sourcing agent from now on
     record(
         db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.processed",
-        meta={"document_id": str(doc.id), "analysis": outcome.status},
+        meta={"document_id": str(doc.id), "analysis": outcome.status, "passages": passages},
     )
     await db.commit()
     return {"analysis": outcome.status}
@@ -161,6 +163,7 @@ async def dead_analyze(db: AsyncSession, job: Job, error: str) -> None:
         return
     doc.status, doc.analysis_status = "processed", "failed"
     doc.error, doc.processed_at, doc.updated_at = error[:2000], _now(), _now()
+    await index_document(db, doc)  # the text is still useful even though the AI analysis failed
     record(
         db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.analysis_failed",
         meta={"document_id": str(doc.id), "error": error[:300]},

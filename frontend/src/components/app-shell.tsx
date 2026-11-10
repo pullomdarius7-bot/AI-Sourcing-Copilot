@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import { MeProvider } from "@/components/me-context";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: null },
+  { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use" },
   { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read" },
   { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload" },
   { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read" },

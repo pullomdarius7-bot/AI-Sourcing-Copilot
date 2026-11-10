@@ -217,3 +217,60 @@ Settings: `FX_MAX_AGE_DAYS` (30), `QUOTE_VALIDITY_WARNING_DAYS` (7), `QUOTE_IMPO
 Assumptions: exchange rates are entered by people (from treasury or a bank), never fetched; the analysis date is the
 UTC date of the run; lead time for a quote is its slowest priced line; a missing unit on a quoted line is taken as the
 requested unit and flagged; freight and other unmatched lines are listed but not added to prices.
+
+## Sprint 6: sourcing assistant and monitoring
+
+Run `make env-upgrade` on an existing install (adds `METRICS_TOKEN` and `GRAFANA_ADMIN_PASSWORD` to `.env` without
+touching existing values), then `make up`. Migration `0006` runs automatically. No new services are required and no new
+Python or npm dependencies were added.
+
+**The assistant works as soon as the stack is up.** Open *Assistant* in the app. With no AI provider configured it runs
+in deterministic mode: fixed rules choose the tools, and answers are assembled from the tools' own statements. With a
+provider configured (Anthropic, OpenAI or a local Ollama model, as in Sprint 2) and `AGENT_MODE=auto`, the model plans
+the tool calls and words the answer, and the safety layer checks every statement before it is shown.
+
+What it does: answers sourcing questions, analyses an RFQ, compares suppliers, explains a supplier's score criterion by
+criterion, summarizes documents (verbatim key passages plus the grounded fields of the document analysis), recommends
+next actions from workflow state (per RFQ or across the work queues) and generates stored reports with PDF and Markdown
+export.
+
+Guarantees, enforced in code and tests:
+- **Every answer cites sources.** Each statement carries source ids (S1, S2, …); each source names what it is, links to
+  the page it came from and carries a SHA-256 of its content. A statement without a valid source is never shown.
+- **No fabricated figures.** All numbers come from the deterministic services (analysis engine, qualification state,
+  stored records). Any number in a model-written statement that is not in the sources it cites causes the whole model
+  answer to be rejected and replaced by the deterministic answer; the rejection is recorded.
+- **Unknown stays unknown.** What the tools cannot find is listed under *Unknown*, never filled in.
+- **Every response is traceable.** Each answer links to an append-only run record: the question, plan (and who made it:
+  rules or model), every tool call with its arguments, sources and timing, every model call with prompt and response
+  fingerprints, safety flags, prompt version and hash, and an answer hash. Runs are in the audit log as `agent.answered`.
+- **Read-only.** The assistant cannot award, approve, send, edit or delete; such requests are refused and pointed to the
+  right page. Reports are its only write, into its own table.
+- **Permission-aware and tenant-isolated.** Each tool checks the asking user's permissions and reads through the same
+  row-level security as the rest of the app. Conversations are private to their author; auditors and admins can read
+  every run (`agent:audit`).
+- **Prompt-injection resistant.** Document text is passed to a model only as fenced, labelled data; instruction-like text
+  in a source is flagged on the run. The deterministic path cannot be steered by document content at all.
+
+Retrieval is PostgreSQL full-text search (a generated `tsvector` column with a GIN index) over document text, so there is
+no vector database or embedding service to run. Documents are indexed by the worker when processing finishes; documents
+processed before this sprint are indexed during the first searches (`AGENT_INDEX_ON_DEMAND_DOCS` per search), or all at
+once with `POST /api/v1/agent/reindex` (admins). General terms (all eleven Incoterms 2020 rules, MOQ, lead time, payment
+terms, TCO, …) and the app's own scoring, risk, conversion and award methods come from a built-in, versioned reference;
+the method entries are generated from the analysis engine's constants.
+
+Architecture and API details: [docs/AGENT.md](docs/AGENT.md).
+
+**Monitoring.** The API exposes Prometheus metrics at `/metrics` (inside the compose network; bearer `METRICS_TOKEN`;
+disabled in production without a token; never proxied by the web front end). `make monitoring` starts Prometheus
+(127.0.0.1:9090) with alert rules and Grafana (127.0.0.1:3001, user `admin`, password `GRAFANA_ADMIN_PASSWORD`) with a
+provisioned dashboard: API traffic, errors and latency, assistant answers by outcome, latency, tool calls, safety events,
+model tokens and ratings, job queue and documents. Details: [docs/MONITORING.md](docs/MONITORING.md).
+
+Settings: `AGENT_MODE` (auto | deterministic | llm), `AGENT_MAX_TOOL_CALLS` (4), `AGENT_RATE_PER_MINUTE` (20 per user),
+`AGENT_INDEX_ON_DEMAND_DOCS` (20), `METRICS_TOKEN`, `GRAFANA_ADMIN_PASSWORD`, `PROMETHEUS_RETENTION` (15d).
+
+Assumptions: the assistant answers in English; it does not learn across conversations (memory is the conversation's own
+history and the entities it is about); full-text search uses PostgreSQL's language-neutral `simple` configuration so it
+works for any language without stemming; Prometheus alert rules are evaluated and visible in Prometheus and Grafana, and
+delivery (email, chat) is left to an Alertmanager you add, since none is required to run the stack.

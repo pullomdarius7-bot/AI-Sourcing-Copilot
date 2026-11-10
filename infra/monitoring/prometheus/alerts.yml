@@ -1,0 +1,66 @@
+groups:
+  - name: copilot-availability
+    rules:
+      - alert: CopilotApiDown
+        expr: up{job="copilot-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: The API is not answering metrics scrapes.
+      - alert: CopilotDatabaseUnavailable
+        expr: copilot_database_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: The API cannot query PostgreSQL.
+      - alert: CopilotHighErrorRate
+        expr: |
+          sum(rate(copilot_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(copilot_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: More than 5 % of API requests fail with a server error.
+      - alert: CopilotSlowApi
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(copilot_http_request_duration_seconds_bucket{route!~".*/agent/.*"}[5m]))) > 2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 95th percentile API latency (excluding the assistant) is above 2 seconds.
+
+  - name: copilot-workers
+    rules:
+      - alert: CopilotJobBacklog
+        expr: copilot_jobs_oldest_queued_seconds > 900
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: A background job has been waiting for more than 15 minutes; check the worker container.
+      - alert: CopilotJobsDeadLettered
+        expr: sum(delta(copilot_jobs{status="dead"}[1h])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: Jobs moved to the dead letter queue in the last hour; see Jobs in the app.
+
+  - name: copilot-assistant
+    rules:
+      - alert: CopilotAssistantErrors
+        expr: sum(increase(copilot_agent_answers_total{status="error"}[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: The sourcing assistant failed to answer at least once in 15 minutes; see the run traces.
+      - alert: CopilotAssistantModelRejections
+        expr: |
+          sum(increase(copilot_agent_answers_total{mode="llm",status="fallback"}[1h]))
+            / clamp_min(sum(increase(copilot_agent_answers_total{mode="llm"}[1h])), 1) > 0.3
+        for: 15m
+        labels: {severity: info}
+        annotations:
+          summary: Over 30 % of model-written answers were rejected by the grounding checks and replaced by deterministic ones.
+      - alert: CopilotAssistantSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(copilot_agent_answer_duration_seconds_bucket[15m]))) > 30
+        for: 15m
+        labels: {severity: info}
+        annotations:
+          summary: 95th percentile assistant answer time is above 30 seconds.

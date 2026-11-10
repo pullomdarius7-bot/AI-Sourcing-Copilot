@@ -61,7 +61,15 @@ jobs:
       - run: docker compose config -q
       - run: docker compose up -d --build --wait --wait-timeout 900
       - run: ./scripts/smoke.sh
+        env:
+          METRICS_URL: http://127.0.0.1:8000/metrics
+      - name: Monitoring profile
+        run: |
+          set -a; . ./.env; set +a
+          docker run --rm -v "$PWD/infra/monitoring/prometheus:/p:ro" --entrypoint promtool prom/prometheus:v2.55.1 check rules /p/alerts.yml
+          docker compose --profile monitoring up -d --wait prometheus grafana
+          ./scripts/check-monitoring.sh
       - if: failure()
         run: docker compose logs --no-color --tail=200
       - if: always()
-        run: docker compose down -v
+        run: docker compose --profile monitoring down -v

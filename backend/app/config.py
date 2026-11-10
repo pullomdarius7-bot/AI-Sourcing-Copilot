@@ -96,6 +96,19 @@ class Settings(BaseSettings):
     quote_validity_warning_days: int = 7  # a quote expiring within this many days is flagged
     quote_import_max_mb: int = 5
 
+    # --- Sourcing agent ---
+    agent_mode: str = "auto"  # auto (model when one is configured, else deterministic) | deterministic | llm
+    agent_max_question_chars: int = 4000
+    agent_max_tool_calls: int = 4
+    agent_history_turns: int = 6
+    agent_rate_per_minute: int = 20
+    agent_index_chunk_chars: int = 1500
+    agent_index_on_demand_docs: int = 20  # processed documents indexed during a search if the worker has not yet
+
+    # --- Monitoring ---
+    metrics_token: str = ""  # bearer token for /metrics; when empty, /metrics is disabled in production
+    metrics_dir: str = "/tmp/copilot-metrics"  # per-process snapshots merged at scrape time
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

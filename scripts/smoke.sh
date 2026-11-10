@@ -68,6 +68,22 @@ curl -fsS -b "$JAR" "$BASE/api/units" | grep -q '"dimension":"mass"'
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -X DELETE "$BASE/api/fx-rates/$RATE_ID")
 [ "$CODE" = "204" ] || { echo "exchange rate delete returned $CODE"; exit 1; }
 curl -fsS -b "$JAR" "$BASE/api/rfqs/$RFQ_ID/recommendations" | grep -q '^\['
+echo "-> sourcing assistant (deterministic, cited)"
+ANSWER=$(curl -fsS -b "$JAR" -X POST "$BASE/api/agent/ask" -H 'content-type: application/json' -d '{"question":"What is DAP?"}')
+echo "$ANSWER" | grep -q 'Delivered at Place' || { echo "assistant did not answer from the reference"; exit 1; }
+echo "$ANSWER" | grep -q '"kind":"glossary"' || { echo "assistant answer has no source"; exit 1; }
+RUN_ID=$(echo "$ANSWER" | sed -n 's/.*"run":{"id":"\([^"]*\)".*/\1/p')
+[ -n "$RUN_ID" ] || { echo "assistant answer is not traceable to a run"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/agent/runs/$RUN_ID" | grep -q '"prompt_sha256"'
+ANSWER=$(curl -fsS -b "$JAR" -X POST "$BASE/api/agent/ask" -H 'content-type: application/json' -d "{\"question\":\"What should we do next on $(curl -fsS -b "$JAR" "$BASE/api/rfqs/$RFQ_ID" | sed -n 's/.*"number":"\([^"]*\)".*/\1/p')?\"}")
+echo "$ANSWER" | grep -q 'submit it for approval\|Before submitting' || { echo "assistant next actions missing"; exit 1; }
+if [ -n "${METRICS_URL:-}" ]; then
+  echo "-> metrics"
+  TOKEN="${METRICS_TOKEN:-$(sed -n 's/^METRICS_TOKEN=//p' "$(dirname "$0")/../.env" 2>/dev/null)}"
+  curl -fsS -H "Authorization: Bearer $TOKEN" "$METRICS_URL" | grep -q 'copilot_agent_answers_total'
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' "$METRICS_URL")
+  [ "$CODE" = "401" ] || { echo "metrics without a token should be refused, got $CODE"; exit 1; }
+fi
 echo "-> logout";           curl -fsS -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout" >/dev/null
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/auth/me")
 [ "$CODE" = "401" ] || { echo "expected 401 after logout, got $CODE"; exit 1; }

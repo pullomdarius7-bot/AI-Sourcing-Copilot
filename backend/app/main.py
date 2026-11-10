@@ -1,16 +1,19 @@
+import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import metrics
 from app.config import get_settings
-from app.db import engine
+from app.db import SessionLocal, engine, set_system
 from app.errors import ApiError
-from app.routers import analysis, auth, documents, health, jobs, requirements, rfqs, suppliers, team
+from app.routers import agent, analysis, auth, documents, health, jobs, requirements, rfqs, suppliers, team
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -40,6 +43,46 @@ if settings.cors_origins:
         allow_headers=["Authorization", "Content-Type"],
         allow_credentials=False,
     )
+
+
+@app.middleware("http")
+async def request_metrics(request: Request, call_next):
+    if request.url.path == "/metrics":
+        return await call_next(request)
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None) or "unmatched"  # templates, never raw paths, keep cardinality bounded
+        metrics.HTTP_REQUESTS.inc(method=request.method, route=template, status=str(status))
+        metrics.HTTP_DURATION.observe(time.perf_counter() - started, method=request.method, route=template)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics(request: Request):
+    """Prometheus scrape endpoint. Needs METRICS_TOKEN as a bearer token; disabled in production without one.
+    Not under /api, so the web front end never proxies it."""
+    if settings.metrics_token:
+        supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(supplied.encode(), settings.metrics_token.encode()):
+            return _error(401, "unauthorized", "Metrics need a valid bearer token", {"WWW-Authenticate": "Bearer"})
+    elif settings.is_production:
+        return _error(404, "not_found", "Not Found")
+    body = metrics.REGISTRY.render()
+    try:
+        async with SessionLocal() as db:
+            await set_system(db)
+            body += await metrics.database_gauges(db)
+            await db.rollback()
+        body += "# HELP copilot_database_up Whether the database answered the metrics queries.\n# TYPE copilot_database_up gauge\ncopilot_database_up 1\n"
+    except Exception:
+        logger.exception("metrics database query failed")
+        body += "# HELP copilot_database_up Whether the database answered the metrics queries.\n# TYPE copilot_database_up gauge\ncopilot_database_up 0\n"
+    return PlainTextResponse(body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.middleware("http")
@@ -94,3 +137,4 @@ app.include_router(requirements.router, prefix="/api/v1")
 app.include_router(suppliers.router, prefix="/api/v1")
 app.include_router(rfqs.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
+app.include_router(agent.router, prefix="/api/v1")
