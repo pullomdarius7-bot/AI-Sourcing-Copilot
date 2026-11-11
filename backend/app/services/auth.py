@@ -131,10 +131,14 @@ async def register(
     if settings.require_email_verification:
         raw = await create_email_token(db, user, VERIFY, timedelta(hours=settings.verify_token_hours))
     if invite_token and account_type == "supplier":
-        from app.sourcing import invites
+        from app.sourcing import guest, invites
 
-        if await invites.mark_joined(db, invite_token, org.id):
-            record(db, org_id=org.id, user_id=user.id, action="supplier_invite.accepted", ip=client.ip)
+        invite = await invites.mark_joined(db, invite_token, org.id)
+        if invite is not None:
+            org.signup_promo = "invite_first_month"  # first paid month discounted
+            converted = await guest.convert_on_join(db, invite, org.id, user.id)
+            record(db, org_id=org.id, user_id=user.id, action="supplier_invite.accepted", ip=client.ip,
+                   meta={"quotes_converted": converted})
     record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip,
            meta={"account_type": account_type})
     await db.refresh(user)

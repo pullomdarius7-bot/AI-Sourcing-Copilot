@@ -199,7 +199,8 @@ class EventOut(BaseModel):
 
 class ThreadSummaryOut(BaseModel):
     id: uuid.UUID
-    lot_id: uuid.UUID
+    lot_id: uuid.UUID | None
+    request_id: uuid.UUID | None = None
     lot_title: str
     my_side: Literal["buyer", "supplier"]
     counterparty: SellerOut

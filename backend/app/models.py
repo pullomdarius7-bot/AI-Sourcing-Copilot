@@ -67,6 +67,8 @@ class Organization(Base):
     purchased_credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Sourcing Team margin rules and freight overlays used as the defaults of every deep analysis.
     analysis_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # invite_first_month: joined through a supplier invitation, first month discounted | used
+    signup_promo: Mapped[str | None] = mapped_column(String(24))
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(64))
@@ -931,12 +933,13 @@ class LotAnalysis(TenantMixin, Base):
 
 
 class RfqThread(Base):
-    """A negotiation between one buyer and the seller of a lot. Readable only by the two parties."""
+    """A negotiation between one buyer and one seller, about a lot or about a quote on a buyer request.
+    Readable only by the two parties."""
 
     __tablename__ = "rfq_threads"
 
     id: Mapped[uuid.UUID] = _pk()
-    lot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"), nullable=False)
+    lot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"))
     buyer_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     supplier_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
@@ -1051,7 +1054,32 @@ class SourcingCandidate(TenantMixin, Base):
     invite_status: Mapped[str | None] = mapped_column(String(12))
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"))
     flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    # Web suppliers stay anonymous to the buyer: identity lives in the platform-only invitation record.
+    domain_hash: Mapped[str | None] = mapped_column(String(64))
+    invite_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_invites.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = _created()
+
+
+class GuestQuote(TenantMixin, Base):
+    """A free quote an invited supplier sent without an account. Belongs to the buyer's account."""
+
+    __tablename__ = "guest_quotes"
+
+    id: Mapped[uuid.UUID] = _pk()
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sourcing_requests.id", ondelete="CASCADE"), nullable=False)
+    invite_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("supplier_invites.id", ondelete="CASCADE"), nullable=False)
+    supplier_alias: Mapped[str] = mapped_column(String(24), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    quantity_available: Mapped[int] = mapped_column(Integer, nullable=False)
+    condition: Mapped[str] = mapped_column(String(20), nullable=False)
+    available_by: Mapped[Any] = mapped_column(Date, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="new")  # new | interested | declined | converted
+    buyer_reply: Mapped[str | None] = mapped_column(Text)
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("rfq_threads.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
 
 
 class SupplierInvite(Base):

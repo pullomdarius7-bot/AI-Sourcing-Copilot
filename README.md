@@ -478,14 +478,14 @@ Migration `0012` adds `organizations.purchased_credits`.
 
 ## AI sourcing engine
 
-Buyers describe what they need at **AI Sourcing** (`/sourcing`): product, category, condition, quantity, target
-price, delivery region and date.
+Buyers describe what they need at **AI Sourcing** (`/sourcing`): product, details, category, condition, quantity,
+target price, delivery region and date. Every field is required (form and API) so the search runs on a complete brief.
 
 1. **Marketplace first (free).** Published lots whose title or lines match the request (and its category) are
    listed straight away.
 2. **Then the web.** When no lot matches (or the buyer asks), a `sourcing.web_search` job searches through a search
    API (`SEARCH_PROVIDER`: self-hosted SearXNG or Brave Search; search-result pages are never scraped), skips
-   marketplaces and social networks, and reads up to `WEB_SOURCING_MAX_SITES` supplier websites: the page found plus
+   marketplaces and social networks, and reads up to `WEB_SOURCING_MAX_SITES` (5) supplier websites: the page found plus
    up to two contact / about / wholesale pages each. The crawler honours robots.txt, fetches only public internet
    addresses (every redirect re-checked, against server-side request forgery), reads HTML only, and limits size
    and time. `/bot` explains it to website owners.
@@ -495,8 +495,17 @@ price, delivery region and date.
    are dropped. Without a model, a smaller profile is built by rules. Sites that are not B2B suppliers or not
    relevant are discarded. Costs `CREDIT_COST_WEB_SOURCING` (2) credits, refunded when nothing is found; the buyer
    is emailed when results are ready.
-4. **Into the workflow.** A found supplier can be saved to the supplier directory with its contact, ready for an RFQ.
-5. **Invitations.** Suppliers found on the web are invited to join and quote (below). Once on the platform they see
+4. **Masked suppliers.** The buyer never sees a web supplier's business name, website, email or phone: they are
+   shown as `Supplier W-XXXXX` with a profile scrubbed of names and contacts and a state-level location. The
+   identity is stored only in the platform-level invitation record, not in the buyer's data, so the deal stays on
+   the platform.
+5. **Invitations and free quotes.** The `INVITES_PER_REQUEST` (3) most relevant suppliers are invited. From the
+   invitation they can send a quote on the buyer's request for free, without an account (`/quote`); the buyer sees it
+   under the masked alias and can decline or say it wants to go ahead (with a reply). Continuing requires the
+   supplier to register (free): on registration every open quote becomes a masked negotiation with the buyer's
+   reply in it. Suppliers who join through an invitation get `INVITE_FIRST_MONTH_DISCOUNT_PCT` (75%) off their first
+   month of the Verified Supplier plan (a once-only Stripe coupon; no trial days, so the discount lands on a paid
+   invoice). Once on the platform they see
    open buyer requests under **Buyer requests** (`/supplier/requests`, masked, best matches first, no per-lead
    fees) and answer with one of their lots, which opens a masked negotiation in which they made the first offer.
 

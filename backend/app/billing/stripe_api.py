@@ -63,7 +63,7 @@ class StripeAPI:
 
     async def create_checkout_session(
         self, *, customer: str, plan: Plan, organization_id: str, metadata: dict[str, str],
-        trial_days: int | None, success_url: str, cancel_url: str,
+        trial_days: int | None, success_url: str, cancel_url: str, coupon: str | None = None,
     ) -> str:
         subscription_data: dict[str, Any] = {"metadata": metadata}
         if trial_days:
@@ -79,9 +79,22 @@ class StripeAPI:
                 "metadata": metadata,
                 "success_url": success_url,
                 "cancel_url": cancel_url,
+                **({"discounts": [{"coupon": coupon}]} if coupon else {}),
             },
         )
         return session.url
+
+    async def ensure_coupon(self, coupon_id: str, percent_off: int) -> str:
+        """The invited-supplier coupon: percent off the first invoice only. Created on first use."""
+        try:
+            coupon = await asyncio.to_thread(self._client.v1.coupons.retrieve, coupon_id)
+            return coupon.id
+        except stripe.InvalidRequestError:
+            coupon = await asyncio.to_thread(self._client.v1.coupons.create, params={
+                "id": coupon_id, "percent_off": percent_off, "duration": "once",
+                "name": f"{percent_off}% off your first month",
+            })
+            return coupon.id
 
     async def create_topup_session(
         self, *, customer: str, credits: int, unit_amount_cents: int, organization_id: str, metadata: dict[str, str],

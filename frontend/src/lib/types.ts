@@ -19,6 +19,7 @@ export interface Billing {
   purchased_credits: number;
   team_features: boolean;
   support: { email: string | null; priority: boolean };
+  promo: { percent_off: number; plan: string } | null;
   topup: { available: boolean; reason: string | null; price_cents: number | null; min_credits: number; max_credits: number; available_at_or_below: number };
   seats: { used: number; limit: number | null };
   plans: { key: string; name: string; price_cents: number; monthly_credits: number; seats: number | null; topup_price_cents: number }[];

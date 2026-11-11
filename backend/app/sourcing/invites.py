@@ -69,27 +69,29 @@ def _demand(request: SourcingRequest) -> dict[str, Any]:
     }
 
 
-async def consider(db: AsyncSession, request: SourcingRequest, candidate: SourcingCandidate) -> str | None:
+async def consider(db: AsyncSession, request: SourcingRequest, profile, candidate: SourcingCandidate) -> str | None:
     """Record (and, when every safeguard passes, queue) an invitation for a web-found supplier. Returns the status
     shown to the buyer: queued, invited (recently), held, member, suppressed, joined, no_contact, or None when invites
     are off or the request is private."""
     if settings.supplier_invites == "off" or not request.open_to_suppliers:
         return None
-    if not candidate.contact_email or not candidate.domain:
+    if not profile.contact_email or not profile.domain:
         return "no_contact"
     await set_system(db)
     try:
-        if await _suppressed(db, candidate.contact_email, candidate.domain):
+        if await _suppressed(db, profile.contact_email, profile.domain):
             return "suppressed"
-        if await _already_member(db, candidate.domain):
+        if await _already_member(db, profile.domain):
             return "member"
-        invite = await db.scalar(select(SupplierInvite).where(SupplierInvite.domain == candidate.domain).with_for_update())
+        invite = await db.scalar(select(SupplierInvite).where(SupplierInvite.domain == profile.domain).with_for_update())
         if invite is None:
-            invite = SupplierInvite(id=uuid.uuid4(), domain=candidate.domain, email=candidate.contact_email,
-                                    company_name=candidate.company_name, source_url=candidate.contact_url or candidate.website or "",
+            invite = SupplierInvite(id=uuid.uuid4(), domain=profile.domain, email=profile.contact_email,
+                                    company_name=profile.company_name, source_url=profile.contact_url or profile.website or "",
                                     status="pending", demand=[], request_count=0, sent_count=0)
             invite.token_hash = _hash(token_for(invite.id))
             db.add(invite)
+            await db.flush()
+        candidate.invite_id = invite.id
         if invite.status in ("suppressed", "joined"):
             return invite.status
         if all(d.get("request_id") != str(request.id) for d in invite.demand):
@@ -129,15 +131,18 @@ def invite_email(invite: SupplierInvite, token: str) -> tuple[str, str]:
         f"Buyers on {settings.platform_name}, a B2B marketplace for wholesale and liquidation inventory, are looking "
         f"for products your website lists:\n\n" + "\n".join(lines) +
         (f"\n  ...and {more} more request(s)." if more > 0 else "") +
-        "\n\nThe buyers are verified businesses. You can see their requests and send quotes for free once you list "
-        f"as a supplier:\n{base}/register?role=supplier&invite={token}\n\n"
+        "\n\nSend a quote now, free and without an account (it takes two minutes):\n"
+        f"{base}/quote?token={token}\n\n"
+        "If a buyer wants to go ahead, you register for free to continue the conversation and close the deal on the "
+        f"platform. Suppliers who join through this invitation get {settings.invite_first_month_discount_pct}% off "
+        f"their first month of the Verified Supplier plan:\n{base}/register?role=supplier&invite={token}\n\n"
         f"Why you received this: we found {invite.email} published on {invite.domain} while searching for suppliers "
         "of these products. We will not email you about this again for "
         f"{settings.invite_cooldown_days} days.\n\n"
         f"Unsubscribe (one click, permanent): {base}/unsubscribe?token={token}\n\n"
         f"{settings.platform_name}\n{settings.invite_sender_postal_address}\n"
     )
-    return f"Buyers are looking for {topic} - quote on {settings.platform_name}", body
+    return f"Buyers are looking for {topic} - send a free quote on {settings.platform_name}", body
 
 
 async def handle_send(db: AsyncSession, job) -> dict[str, Any]:
@@ -183,13 +188,13 @@ async def unsubscribe(db: AsyncSession, token: str) -> SupplierInvite | None:
     return invite
 
 
-async def mark_joined(db: AsyncSession, token: str, org_id: uuid.UUID) -> bool:
+async def mark_joined(db: AsyncSession, token: str, org_id: uuid.UUID) -> SupplierInvite | None:
     """Called at registration (system context) when the sign-up came from an invitation link."""
     invite = await db.scalar(select(SupplierInvite).where(SupplierInvite.token_hash == _hash(token)).with_for_update())
-    if invite is None or invite.status == "suppressed":
-        return False
+    if invite is None or invite.status in ("suppressed", "joined"):
+        return None
     invite.status, invite.joined_org_id, invite.updated_at = "joined", org_id, _now()
-    return True
+    return invite
 
 
 async def invite_preview(db: AsyncSession, token: str) -> dict[str, Any] | None:

@@ -72,6 +72,9 @@ export default function BillingPage() {
         <p className="mt-1 text-sm text-muted-foreground">One credit covers a manifest of up to 500 line items, or one full analysis run.</p>
       </div>
       {notice && <Alert variant="success">{notice}</Alert>}
+      {data.promo && (
+        <Alert variant="success">Welcome offer: {data.promo.percent_off}% off your first month of the Verified Supplier plan, applied at checkout.</Alert>
+      )}
       {problem && <Alert variant="error">{problem}</Alert>}
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -202,9 +205,11 @@ export default function BillingPage() {
                         {busy === plan.key ? "Opening checkout…" : `Subscribe to ${plan.name}`}
                       </Button>
                       <p className="mt-2 text-xs text-muted-foreground">
-                        {data.checkout_trial_days
-                          ? `Your trial continues: first charge in ${data.checkout_trial_days} ${data.checkout_trial_days === 1 ? "day" : "days"}.`
-                          : "Charged today; credits are added as soon as payment succeeds."}
+                        {data.promo && data.promo.plan === plan.key
+                          ? `${data.promo.percent_off}% off your first month: ${usd(Math.round(plan.price_cents * (100 - data.promo.percent_off)) / 100)} today, then ${usd(plan.price_cents)}/month.`
+                          : data.checkout_trial_days
+                            ? `Your trial continues: first charge in ${data.checkout_trial_days} ${data.checkout_trial_days === 1 ? "day" : "days"}.`
+                            : "Charged today; credits are added as soon as payment succeeds."}
                       </p>
                     </div>
                   ) : (

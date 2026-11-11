@@ -18,6 +18,7 @@ from tests.market_helpers import (
     supplier,
     upload,
 )
+from tests.test_marketplace import without_ids_and_times
 
 BUYER_ORG = "FlipCo Resale"
 BUYER_EMAIL = "buyer@flipco.test"
@@ -84,7 +85,7 @@ async def test_an_offer_below_the_reserve_is_declined_without_revealing_it(clien
     seller, shopper, lot_id, t = await start(client, worker, price="850.00")  # reserve is 900
     assert t["status"] == "declined" and t["closed_reason"] == "below_reserve"
     assert [e["kind"] for e in t["events"]] == ["offer", "auto_decline"]
-    assert "900" not in str(t) and t["warnings"]
+    assert "900" not in str(without_ids_and_times(t)) and t["warnings"]
     assert mail.outbox == []  # the seller is not bothered
     again = await client.post(f"/marketplace/lots/{lot_id}/offers", json=offer("950.00"), headers=shopper.headers)
     assert again.status_code == 201 and again.json()["status"] == "open"

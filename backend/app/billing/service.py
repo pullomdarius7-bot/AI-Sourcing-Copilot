@@ -41,11 +41,25 @@ def _ts(value: Any) -> datetime | None:
 
 
 # --- Checkout and portal -----------------------------------------------------------------------------
+PROMO = "invite_first_month"
+
+
+def first_month_promo(org: Organization, plan_key: str | None = None) -> dict[str, Any] | None:
+    """Suppliers who joined through an invitation get a discount on their first paid month."""
+    if org.signup_promo != PROMO or org.account_type != "supplier":
+        return None
+    if plan_key is not None and plan_key != "supplier_monthly":
+        return None
+    return {"percent_off": settings.invite_first_month_discount_pct, "plan": "supplier_monthly"}
+
+
 def checkout_trial_days(org: Organization) -> int | None:
     """Days of trial to carry into the subscription: whatever is left of the account's free trial, and only
     while it still has trial credits to use. An account that has run out pays now and gets its quota now."""
     if org.stripe_subscription_id or org.subscription_status != "none":
         return None
+    if first_month_promo(org):
+        return None  # the discount applies to the first invoice, so it must not be a $0 trial invoice
     if org.trial_ends_at is None or org.credit_balance <= 0:
         return None
     remaining = (org.trial_ends_at - _now()).total_seconds() / 86400
@@ -75,8 +89,13 @@ async def create_checkout(db: AsyncSession, p: Principal, plan_key: str) -> str:
         raise conflict("already_subscribed", "This account already has a subscription. Manage it in the billing portal.")
     customer = await ensure_customer(db, p)
     metadata = {"organization_id": str(p.org_id), "user_id": str(p.user.id), "plan": plan.key}
+    promo = first_month_promo(p.org, plan.key)
+    coupon = None
+    if promo:
+        coupon = await get_stripe().ensure_coupon(settings.stripe_invite_coupon_id, promo["percent_off"])
+        metadata["promo"] = PROMO
     return await get_stripe().create_checkout_session(
-        customer=customer, plan=plan, organization_id=str(p.org_id), metadata=metadata,
+        customer=customer, plan=plan, organization_id=str(p.org_id), metadata=metadata, coupon=coupon,
         trial_days=checkout_trial_days(p.org),
         success_url=f"{settings.app_base_url}/billing?checkout=success",
         cancel_url=f"{settings.app_base_url}/billing?checkout=cancelled",
@@ -214,6 +233,8 @@ async def _checkout_completed(db: AsyncSession, obj: dict[str, Any]) -> Organiza
     plan = PLANS.get(_get(obj, "metadata", "plan") or "")
     _apply_plan(org, plan)
     paid = obj.get("payment_status") == "paid"
+    if _get(obj, "metadata", "promo") == PROMO and org.signup_promo == PROMO:
+        org.signup_promo = "used"
     if paid:
         org.subscription_status = "active"
         invoice = _id(obj.get("invoice"))

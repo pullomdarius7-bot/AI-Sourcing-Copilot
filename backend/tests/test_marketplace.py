@@ -33,6 +33,15 @@ async def set_credits(admin_engine, org_id, amount):
         await conn.execute(text("UPDATE organizations SET credit_balance = :a WHERE id = :o"), {"a": amount, "o": org_id})
 
 
+def without_ids_and_times(value):
+    if isinstance(value, dict):
+        return {k: without_ids_and_times(v) for k, v in value.items()
+                if not (k == "id" or k.endswith("_id") or k.endswith("_at") or k == "member_since")}
+    if isinstance(value, list):
+        return [without_ids_and_times(v) for v in value]
+    return value
+
+
 def by_title(lot, start):
     return next(i for i in lot["items"] if i["title"].startswith(start))
 
@@ -269,9 +278,12 @@ async def test_drafts_are_private_and_published_lots_are_listed_without_seller_i
     assert listing["total"] == 1
     detail = await client.get(f"/marketplace/lots/{lot['id']}", headers=shopper.headers)
     raw = detail.text
-    for secret in (SELLER_ORG, SELLER_EMAIL, seller.org_id, seller.user_id, "Fulton", "Rosa", "312-555-0142", "900",
-                   "60607", "reserve"):
+    for secret in (SELLER_ORG, SELLER_EMAIL, seller.org_id, seller.user_id, "Fulton", "Rosa", "312-555-0142", "reserve"):
         assert secret not in raw, secret
+    # Numbers are checked on the values only: random ids and timestamps may contain any digits.
+    values = str(without_ids_and_times(detail.json()))
+    for secret in ("900", "60607"):
+        assert secret not in values, secret
     body = detail.json()
     assert body["ships_from"] == "Midwest · ZIP 606xx"
     assert body["seller"]["alias"].startswith("S-") and body["seller"]["badges"] == [

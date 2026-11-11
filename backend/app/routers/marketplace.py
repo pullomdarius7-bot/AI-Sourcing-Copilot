@@ -88,7 +88,8 @@ async def thread_out(db: AsyncSession, p: Principal, thread: RfqThread, *, full:
     if thread.status == "open" and thread.offer_by:
         awaiting = "them" if thread.offer_by == side else "you"
     out: dict[str, Any] = {
-        "id": thread.id, "lot_id": thread.lot_id, "lot_title": thread.lot_title, "my_side": side,
+        "id": thread.id, "lot_id": thread.lot_id, "request_id": thread.request_id, "lot_title": thread.lot_title,
+        "my_side": side,
         "counterparty": profiles.public(counterparty), "status": thread.status, "closed_reason": thread.closed_reason,
         "offer_by": thread.offer_by, "offer_price": thread.offer_price, "agreed_price": thread.agreed_price,
         "awaiting": awaiting, "last_event_at": thread.last_event_at,

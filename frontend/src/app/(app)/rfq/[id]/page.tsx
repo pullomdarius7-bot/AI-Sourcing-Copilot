@@ -29,7 +29,10 @@ function OfferCard({ offer }: { offer: NonNullable<ThreadEvent["offer"]> }) {
   return (
     <dl className="mt-2 grid gap-x-6 gap-y-1 rounded-md border bg-background p-3 text-sm sm:grid-cols-3">
       <div><dt className="text-xs text-muted-foreground">Price</dt><dd className="font-mono font-semibold">{money(offer.price, 2)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">Freight</dt><dd>{SHIPPING[offer.shipping_terms] ?? offer.shipping_terms}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">Freight</dt><dd>{offer.shipping_terms ? SHIPPING[offer.shipping_terms] ?? offer.shipping_terms : "To agree"}</dd></div>
+      {offer.quantity && offer.unit_price && (
+        <div className="sm:col-span-3"><dt className="text-xs text-muted-foreground">Quantity</dt><dd>{offer.quantity.toLocaleString()} units at {money(offer.unit_price, 2)} each</dd></div>
+      )}
       <div><dt className="text-xs text-muted-foreground">Target close</dt><dd>{offer.target_close_date}</dd></div>
       {offer.custom_terms && <div className="sm:col-span-3"><dt className="text-xs text-muted-foreground">Terms</dt><dd>{offer.custom_terms}</dd></div>}
     </dl>
@@ -127,7 +130,8 @@ export default function ThreadPage({ params }: { params: { id: string } }) {
             <span>{thread.my_side === "buyer" ? "Seller" : "Buyer"}:</span>
             <SellerBadges seller={thread.counterparty} />
           </div>
-          {thread.my_side === "buyer" && <Link href={`/marketplace/${thread.lot_id}`} className="text-sm text-primary hover:underline">View the lot</Link>}
+          {thread.my_side === "buyer" && thread.lot_id && <Link href={`/marketplace/${thread.lot_id}`} className="text-sm text-primary hover:underline">View the lot</Link>}
+          {thread.my_side === "buyer" && thread.request_id && !thread.lot_id && <Link href={`/sourcing/${thread.request_id}`} className="text-sm text-primary hover:underline">View your request</Link>}
         </div>
         <div className="text-right">
           <Badge variant={thread.status === "accepted" ? "default" : thread.status === "open" ? "neutral" : "caution"}>{STATUS_LABEL[thread.status]}</Badge>

@@ -95,7 +95,8 @@ export default function RegisterPage() {
       {invite && (
         <Alert>
           <strong>{invite.request_count} buyer request{invite.request_count === 1 ? "" : "s"}</strong> for products {invite.company_name} sells
-          {invite.demand[0] ? `, including "${invite.demand[0].title}"` : ""}. Create your free supplier account to see and answer them.
+          {invite.demand[0] ? `, including "${invite.demand[0].title}"` : ""}. Create your free supplier account to answer them, with 75% off
+          your first month of the Verified Supplier plan.
         </Alert>
       )}
       {error && <Alert variant="error">{error}</Alert>}

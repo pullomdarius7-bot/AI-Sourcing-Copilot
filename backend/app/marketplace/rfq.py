@@ -159,7 +159,7 @@ def _describe(profile: MarketProfile | None) -> str:
 
 
 # --- Offers -------------------------------------------------------------------------------------------------
-def _offer(price: Decimal, shipping: str, close: date, terms: str | None) -> dict[str, Any]:
+def _offer(price: Decimal, shipping: str | None, close: date, terms: str | None) -> dict[str, Any]:
     return {"price": str(price), "shipping_terms": shipping, "target_close_date": close.isoformat(), "custom_terms": terms}
 
 
@@ -267,7 +267,7 @@ async def counter(db: AsyncSession, p: Principal, thread_id: uuid.UUID, *, price
     thread.offer_by, thread.offer_price, thread.shipping_terms = side, price, shipping_terms
     thread.target_close_date, thread.custom_terms = target_close_date, terms
     notices: list[Notice] = []
-    reserve = await _reserve(db, thread.lot_id, p.org_id) if side == "buyer" else None
+    reserve = await _reserve(db, thread.lot_id, p.org_id) if side == "buyer" and thread.lot_id else None
     if reserve is not None and price < reserve:
         await _append(db, thread, "system", None, "auto_decline",
                       body="Declined automatically: the offer is below the seller's minimum.")
@@ -313,7 +313,7 @@ async def _reveal(db: AsyncSession, thread: RfqThread, restore_org: uuid.UUID) -
     async def run():
         seller = await db.get(Organization, thread.supplier_org_id)
         buyer = await db.get(Organization, thread.buyer_org_id)
-        details = await db.get(LotPrivateDetails, thread.lot_id)
+        details = await db.get(LotPrivateDetails, thread.lot_id) if thread.lot_id else None
 
         async def contact(org_id: uuid.UUID, preferred: uuid.UUID | None) -> dict[str, str] | None:
             user = await db.get(User, preferred) if preferred else None
@@ -362,14 +362,15 @@ async def decide(db: AsyncSession, p: Principal, thread_id: uuid.UUID, action: s
     notices: list[Notice] = []
     if action == "accept":
         thread.status, thread.agreed_price, thread.accepted_at, thread.offer_by = "accepted", thread.offer_price, _now(), None
-        lot = await _as_system(db, p.org_id, lambda: db.get(MarketplaceLot, thread.lot_id))
-        await set_system(db)
-        try:
-            lot.status, lot.sold_at, lot.updated_at = "sold", _now(), _now()
-            await db.flush()
-        finally:
-            await set_tenant(db, p.org_id)
-        notices += await close_open_threads(db, lot, reason="lot_sold", restore_org=p.org_id, except_id=thread.id)
+        if thread.lot_id is not None:  # a quote on a buyer request has no lot to mark sold
+            lot = await _as_system(db, p.org_id, lambda: db.get(MarketplaceLot, thread.lot_id))
+            await set_system(db)
+            try:
+                lot.status, lot.sold_at, lot.updated_at = "sold", _now(), _now()
+                await db.flush()
+            finally:
+                await set_tenant(db, p.org_id)
+            notices += await close_open_threads(db, lot, reason="lot_sold", restore_org=p.org_id, except_id=thread.id)
         thread.revealed = await _reveal(db, thread, p.org_id)
         for org_id in (thread.buyer_org_id, thread.supplier_org_id):
             await profiles.refresh(db, org_id, restore_org=p.org_id)

@@ -190,7 +190,7 @@ export interface ThreadEvent {
   side: "buyer" | "supplier" | "system";
   mine: boolean;
   author: string;
-  offer: { price: string; shipping_terms: string; target_close_date: string; custom_terms: string | null } | null;
+  offer: { price: string; shipping_terms: string | null; target_close_date: string; custom_terms: string | null; unit_price?: string; quantity?: number; condition?: string } | null;
   body: string | null;
   flags: string[];
   created_at: string;
@@ -198,7 +198,8 @@ export interface ThreadEvent {
 
 export interface ThreadSummary {
   id: string;
-  lot_id: string;
+  lot_id: string | null;
+  request_id: string | null;
   lot_title: string;
   my_side: "buyer" | "supplier";
   counterparty: Seller;
@@ -318,8 +319,24 @@ export interface SourcingRequest {
   completed_at: string | null;
 }
 
+export interface GuestQuote {
+  id: string;
+  supplier_alias: string;
+  unit_price: string;
+  quantity_available: number;
+  condition: string;
+  available_by: string;
+  notes: string | null;
+  flags: string[];
+  status: "new" | "interested" | "declined" | "converted";
+  buyer_reply: string | null;
+  thread_id: string | null;
+  created_at: string;
+}
+
 export interface SourcingRequestDetail extends SourcingRequest {
   candidates: SourcingCandidate[];
+  guest_quotes: GuestQuote[];
   proposals: ThreadSummary[];
   web_search_available: boolean;
   web_search_cost: number;
@@ -360,6 +377,7 @@ export interface PrivateLot {
 
 export const INVITE_STATUS: Record<string, string> = {
   queued: "Invited to quote",
+  quoted: "Sent you a quote",
   invited: "Invited recently",
   held: "Invitation pending",
   member: "Already on the platform",

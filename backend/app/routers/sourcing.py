@@ -18,7 +18,7 @@ from app.models import MarketProfile, RfqThread, SourcingCandidate, SourcingRequ
 from app.ratelimit import auth_rate_limit
 from app.rbac import Permission
 from app.routers.marketplace import _send, thread_out
-from app.sourcing import invites
+from app.sourcing import guest, invites
 from app.sourcing import service as svc
 from app.sourcing.search import get_search
 
@@ -28,14 +28,16 @@ TRADE = require_permission(Permission.MARKETPLACE_TRADE)
 
 
 class RequestIn(BaseModel):
+    """Every field is required: the search is only as good as the brief."""
+
     title: str = Field(min_length=3, max_length=200)
-    description: str | None = Field(default=None, max_length=4000)
-    category: str | None = None
-    condition: str | None = None
-    quantity: int | None = Field(default=None, ge=1, le=10_000_000)
-    target_unit_price: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000"), decimal_places=2)
-    region: str | None = None
-    needed_by: date | None = None
+    description: str = Field(min_length=10, max_length=4000)
+    category: str
+    condition: str
+    quantity: int = Field(ge=1, le=10_000_000)
+    target_unit_price: Decimal = Field(gt=0, le=Decimal("1000000"), decimal_places=2)
+    region: str
+    needed_by: date
     open_to_suppliers: bool = True
     search_web: Literal["auto", "always", "never"] = "auto"
 
@@ -88,8 +90,24 @@ class RequestOut(BaseModel):
     completed_at: datetime | None
 
 
+class GuestQuoteOut(BaseModel):
+    id: uuid.UUID
+    supplier_alias: str
+    unit_price: Decimal
+    quantity_available: int
+    condition: str
+    available_by: date
+    notes: str | None
+    flags: list[str]
+    status: str
+    buyer_reply: str | None
+    thread_id: uuid.UUID | None
+    created_at: datetime
+
+
 class RequestDetailOut(RequestOut):
     candidates: list[CandidateOut]
+    guest_quotes: list[GuestQuoteOut]
     proposals: list[ms.ThreadSummaryOut]
     web_search_available: bool
     web_search_cost: int
@@ -141,6 +159,7 @@ async def _detail(db: AsyncSession, p: Principal, r: SourcingRequest, warnings: 
                                 .order_by(RfqThread.last_event_at.desc()))).all()
     return {
         **_request(r), "candidates": [_candidate(c) for c in candidates if c.status != "dismissed"],
+        "guest_quotes": [{k: getattr(q, k) for k in GuestQuoteOut.model_fields} for q in await guest.quotes_for(db, r.id)],
         "proposals": [await thread_out(db, p, t, full=False) for t in threads],
         "web_search_available": get_search() is not None, "web_search_cost": cost_of(WEB_SOURCING),
         "warnings": warnings or [],
@@ -181,11 +200,18 @@ async def close_request(request_id: uuid.UUID, p: Principal = Depends(TRADE), db
     return await _detail(db, p, request)
 
 
-@router.post("/sourcing/candidates/{candidate_id}/add-to-suppliers", response_model=CandidateOut)
-async def add_candidate(candidate_id: uuid.UUID,
-                        p: Principal = Depends(require_permission(Permission.MARKETPLACE_TRADE, Permission.SUPPLIERS_MANAGE)),
-                        db: AsyncSession = Depends(get_db)):
-    return _candidate(await svc.add_to_directory(db, p, candidate_id))
+class RespondIn(BaseModel):
+    action: Literal["interested", "decline"]
+    message: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/sourcing/guest-quotes/{quote_id}/respond", response_model=GuestQuoteOut)
+async def respond_to_quote(quote_id: uuid.UUID, body: RespondIn, background: BackgroundTasks,
+                           p: Principal = Depends(TRADE), db: AsyncSession = Depends(get_db)):
+    """Decline, or tell the supplier you want to go ahead. Continuing needs the supplier to register."""
+    quote, _, notices = await guest.respond(db, p, quote_id, body.action, body.message)
+    _send(background, notices)
+    return {k: getattr(quote, k) for k in GuestQuoteOut.model_fields}
 
 
 @router.post("/sourcing/candidates/{candidate_id}/dismiss", response_model=CandidateOut)
@@ -228,6 +254,31 @@ async def invite_preview(token: str = Query(min_length=10, max_length=100), db: 
     if preview is None:
         raise not_found("This invitation is no longer valid")
     return preview
+
+
+class GuestQuoteIn(BaseModel):
+    token: str = Field(min_length=10, max_length=100)
+    request_id: uuid.UUID
+    unit_price: Decimal = Field(gt=0, le=Decimal("1000000"), decimal_places=2)
+    quantity_available: int = Field(ge=1, le=10_000_000)
+    condition: str
+    available_by: date
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+@router.get("/invites/quote-form", dependencies=[Depends(auth_rate_limit)])
+async def guest_quote_form(token: str = Query(min_length=10, max_length=100), db: AsyncSession = Depends(get_db)):
+    """What an invited supplier may quote on, without an account."""
+    return await guest.quote_form(db, token)
+
+
+@router.post("/invites/quotes", status_code=201, dependencies=[Depends(auth_rate_limit)])
+async def guest_quote(body: GuestQuoteIn, background: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    quote, warnings, notices = await guest.submit_quote(
+        db, body.token, body.request_id, unit_price=body.unit_price, quantity_available=body.quantity_available,
+        condition=body.condition, available_by=body.available_by, notes=body.notes)
+    _send(background, notices)
+    return {"status": "sent", "notes": quote.notes, "warnings": warnings}
 
 
 @router.post("/invites/unsubscribe", dependencies=[Depends(auth_rate_limit)])

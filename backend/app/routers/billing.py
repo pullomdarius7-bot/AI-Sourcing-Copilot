@@ -80,6 +80,7 @@ class BillingOut(BaseModel):
     purchased_credits: int
     team_features: bool
     support: dict[str, Any]
+    promo: dict[str, Any] | None
     topup: TopUpOut
     seats: SeatsOut
     plans: list[PlanOut]
@@ -130,6 +131,7 @@ async def summary(p: Principal = Depends(require_permission(Permission.ORG_READ)
         checkout_trial_days=service.checkout_trial_days(p.org),
         purchased_credits=p.org.purchased_credits,
         team_features=catalog.team_features(p.org),
+        promo=service.first_month_promo(p.org),
         support={"email": settings.support_email or None, "priority": p.org.plan == catalog.TEAM_PLAN
                  and p.org.subscription_status in ("trialing", "active", "past_due")},
         topup=_topup_out(p.org),

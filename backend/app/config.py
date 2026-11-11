@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     searxng_url: str = ""
     brave_api_key: str = ""
     credit_cost_web_sourcing: int = 2
-    web_sourcing_max_sites: int = 8
+    web_sourcing_max_sites: int = 5  # supplier websites read per search
     web_sourcing_pages_per_site: int = 3
     web_fetch_timeout_seconds: float = 10.0
     web_fetch_max_bytes: int = 1_500_000
@@ -84,7 +84,11 @@ class Settings(BaseSettings):
     supplier_invites: str = "auto"
     invite_cooldown_days: int = 90
     invite_daily_limit: int = 200
-    invites_per_request: int = 10
+    invites_per_request: int = 3  # only the most relevant suppliers are invited
+    # Suppliers who join through an invitation get this much off their first paid month (Stripe coupon, created on
+    # first use with this id when it does not exist yet).
+    invite_first_month_discount_pct: int = 75
+    stripe_invite_coupon_id: str = "invited-supplier-first-month"
     # Required by anti-spam law (CAN-SPAM): the sender's postal address. Invites are held until it is set.
     invite_sender_postal_address: str = ""
     platform_name: str = "Sourcing Copilot"

@@ -26,7 +26,7 @@ from app.marketplace.catalog import CATEGORIES, CONDITIONS, REGIONS
 from app.marketplace.scrub import scrub
 from app.marketplace.service import require_buyer, require_supplier
 from app.models import LotItem, MarketplaceLot, SourcingCandidate, SourcingRequest, User
-from app.sourcing import extract, invites
+from app.sourcing import extract, guest, invites
 from app.sourcing.search import SearchError, get_search
 from app.sourcing.web import Crawler, FetchError, Page, blocked, registered_domain
 
@@ -61,11 +61,15 @@ def words_of(text: str) -> list[str]:
 # --- Requests ----------------------------------------------------------------------------------------------
 async def create_request(db: AsyncSession, p: Principal, data: dict[str, Any]) -> tuple[SourcingRequest, list[str]]:
     require_buyer(p)
-    if data.get("category") not in (None, *CATEGORIES) or data.get("condition") not in (None, *CONDITIONS):
-        raise bad_request("invalid_choice", "Unknown category or condition")
-    if data.get("region") not in (None, *REGIONS):
-        raise bad_request("invalid_choice", "Unknown region")
-    if data.get("needed_by") and data["needed_by"] < date.today():
+    if data.get("category") not in CATEGORIES:
+        raise bad_request("category_required", "Choose the product category")
+    if data.get("condition") not in CONDITIONS:
+        raise bad_request("condition_required", "Choose the condition you want")
+    if data.get("region") not in REGIONS:
+        raise bad_request("region_required", "Choose where the goods should be delivered")
+    if not data.get("needed_by"):
+        raise bad_request("date_required", "Enter the date you need the goods by")
+    if data["needed_by"] < date.today():
         raise bad_request("invalid_date", "The needed-by date cannot be in the past")
     warnings: list[str] = []
     for key in ("title", "description"):
@@ -183,6 +187,10 @@ def _request_brief(request: SourcingRequest) -> str:
         parts.append(f"Quantity: {request.quantity:,} units")
     if request.target_unit_price:
         parts.append(f"Target price: ${request.target_unit_price} per unit")
+    if request.region:
+        parts.append(f"Deliver to: {REGIONS[request.region]} United States")
+    if request.needed_by:
+        parts.append(f"Needed by: {request.needed_by.isoformat()}")
     return "\n".join(parts)
 
 
@@ -217,8 +225,8 @@ async def handle_web_search(db: AsyncSession, job) -> dict[str, Any]:
     request.web_status = "running"
     await db.commit()
 
-    known = set((await db.scalars(select(SourcingCandidate.domain).where(
-        SourcingCandidate.request_id == request.id, SourcingCandidate.domain.is_not(None)))).all())
+    known = set((await db.scalars(select(SourcingCandidate.domain_hash).where(
+        SourcingCandidate.request_id == request.id, SourcingCandidate.domain_hash.is_not(None)))).all())
     urls: list[str] = []
     errors: list[str] = []
     for query in queries_for(request):
@@ -229,8 +237,8 @@ async def handle_web_search(db: AsyncSession, job) -> dict[str, Any]:
             continue
         for hit in hits:
             domain = registered_domain(hit.url)
-            if domain and domain not in known and not blocked(hit.url):
-                known.add(domain)
+            if domain and guest.domain_hash(domain) not in known and not blocked(hit.url):
+                known.add(guest.domain_hash(domain))
                 urls.append(hit.url)
     urls = urls[: settings.web_sourcing_max_sites]
     if not urls and errors:
@@ -244,7 +252,7 @@ async def handle_web_search(db: AsyncSession, job) -> dict[str, Any]:
 
     sites = await _crawl(urls)
     service = get_ai_service()
-    words = words_of(f"{request.title} {request.description or ''}")
+    words = words_of(request.title)  # the product itself; the description is context for the model
     found: list[extract.Profile] = []
     for pages in sites:
         profile = None
@@ -266,27 +274,26 @@ async def handle_web_search(db: AsyncSession, job) -> dict[str, Any]:
 
     await db.refresh(request)
     found.sort(key=lambda pr: -pr.relevance)
-    candidates = []
+    candidates: list[tuple[extract.Profile, SourcingCandidate]] = []
     for profile in found:
+        # The buyer's record never holds the supplier's identity (name, site, email, phone): it stays in the
+        # platform-only invitation, so the deal is made on the platform.
         candidate = SourcingCandidate(
             organization_id=request.organization_id, request_id=request.id, kind="web",
-            company_name=profile.company_name, website=profile.website, domain=profile.domain,
-            business_type=profile.business_type, location=profile.location, summary=profile.summary,
-            categories=profile.categories, products=profile.products, evidence=profile.evidence, moq=profile.moq,
-            price_notes=profile.price_notes, contact_email=profile.contact_email, contact_phone=profile.contact_phone,
-            contact_url=profile.contact_url, relevance=profile.relevance, method=profile.method, flags=profile.flags,
+            business_type=profile.business_type, categories=profile.categories, relevance=profile.relevance,
+            method=profile.method, flags=profile.flags, **guest.masked_profile(profile),
         )
         db.add(candidate)
-        candidates.append(candidate)
+        candidates.append((profile, candidate))
     await db.flush()
     request.web_matches = (request.web_matches or 0) + len(candidates)
     request.web_status, request.completed_at = "done", _now()
     if candidates:
         await gateway.settle(db, permit)
         request.web_note = f"Searched {len(urls)} website(s); {len(candidates)} matched."
-        for candidate in candidates[: settings.invites_per_request]:
-            candidate.invite_status = await invites.consider(db, request, candidate)
-        request.invites_sent += sum(1 for c in candidates if c.invite_status == "queued")
+        for profile, candidate in candidates[: settings.invites_per_request]:  # the most relevant only
+            candidate.invite_status = await invites.consider(db, request, profile, candidate)
+        request.invites_sent += sum(1 for _, c in candidates if c.invite_status == "queued")
     else:
         request.web_note = (f"Searched {len(urls)} website(s) and found no supplier that matches. "
                             "The credits were refunded.")
@@ -318,38 +325,6 @@ async def own_candidate(db: AsyncSession, p: Principal, candidate_id: uuid.UUID)
     candidate = await db.get(SourcingCandidate, candidate_id)
     if candidate is None or candidate.organization_id != p.org_id:
         raise not_found("Supplier not found")
-    return candidate
-
-
-async def add_to_directory(db: AsyncSession, p: Principal, candidate_id: uuid.UUID) -> SourcingCandidate:
-    """Save a web-found supplier in the account's supplier directory, ready for an RFQ."""
-    from app.models import Supplier
-    from app.suppliers import schemas as sc
-    from app.suppliers import service as suppliers
-
-    candidate = await own_candidate(db, p, candidate_id)
-    if candidate.kind != "web":
-        raise bad_request("not_web", "Marketplace lots are negotiated on the marketplace")
-    if candidate.supplier_id:
-        return candidate
-    existing = await db.scalar(select(Supplier).where(Supplier.organization_id == p.org_id,
-                                                      Supplier.name == candidate.company_name))
-    if existing is None:
-        contacts = [sc.ContactIn(name=f"{candidate.company_name} sales", email=candidate.contact_email,
-                                 phone=candidate.contact_phone, is_primary=True)] if candidate.contact_email else []
-        notes = "\n".join(filter(None, [
-            f"Found by AI sourcing for: {(await db.get(SourcingRequest, candidate.request_id)).title}",
-            candidate.summary, f"MOQ: {candidate.moq}" if candidate.moq else None,
-            f"Prices: {candidate.price_notes}" if candidate.price_notes else None,
-            *[f"- {e['quote']} ({e['url']})" for e in candidate.evidence],
-        ]))
-        existing = await suppliers.create_supplier(db, p, sc.SupplierIn(
-            name=candidate.company_name[:200], website=(candidate.website or "")[:300] or None, notes=notes[:4000],
-            contacts=contacts, tags=["ai-sourcing"],
-        ))
-    candidate = await own_candidate(db, p, candidate_id)
-    candidate.supplier_id, candidate.status = existing.id, "added"
-    await db.commit()
     return candidate
 
 

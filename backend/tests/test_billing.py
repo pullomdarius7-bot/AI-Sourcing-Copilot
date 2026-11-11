@@ -95,6 +95,10 @@ class FakeStripe:
         self.checkouts.append(kw)
         return "https://checkout.stripe.test/session"
 
+    async def ensure_coupon(self, coupon_id, percent_off):
+        self.coupons = getattr(self, "coupons", []) + [(coupon_id, percent_off)]
+        return coupon_id
+
     async def create_portal_session(self, **kw):
         self.portals.append(kw)
         return "https://billing.stripe.test/portal"
