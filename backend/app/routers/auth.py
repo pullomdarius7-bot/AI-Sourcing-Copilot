@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import Principal, client_ip, get_principal
 from app.errors import not_found
-from app.models import AuthSession, Organization
+from app.models import AuthSession
 from app.ratelimit import auth_rate_limit
 from app.rbac import permissions_for
 from app.schemas import (
@@ -55,6 +55,7 @@ async def register(
     user, raw = await svc.register(
         db,
         organization_name=body.organization_name,
+        account_type=body.account_type.value,
         full_name=body.full_name,
         email=body.email,
         password=body.password,
@@ -161,11 +162,12 @@ async def accept_invitation(body: AcceptInviteIn, request: Request, db: AsyncSes
 
 @router.get("/me", response_model=MeOut)
 async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(get_db)):
-    org = await db.get(Organization, p.org_id)
     data = UserOut.model_validate(p.user).model_dump()
     return MeOut(
         **data,
-        organization_name=org.name if org else "",
+        organization_name=p.org.name,
+        account_type=p.org.account_type,
+        onboarding_completed=p.org.onboarding_completed,
         permissions=permissions_for(p.user.role),
     )
 

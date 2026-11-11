@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# End-to-end smoke test through the public frontend port: register -> verify -> login -> me -> logout.
+# End-to-end smoke test through the public frontend port: register -> verify -> login -> onboarding -> me -> logout.
 set -eu
 BASE="${BASE_URL:-http://localhost:${FRONTEND_PORT:-3000}}"
 MAIL="${MAIL_URL:-http://localhost:8025}"
@@ -9,7 +9,7 @@ JAR="$(mktemp)"; trap 'rm -f "$JAR"' EXIT
 
 echo "-> frontend health";  curl -fsS "$BASE/api/healthz" >/dev/null
 echo "-> register";         curl -fsS -X POST "$BASE/api/auth/register" -H 'content-type: application/json' \
-  -d "{\"organization_name\":\"Smoke Co\",\"full_name\":\"Smoke Test\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/dev/null
+  -d "{\"account_type\":\"org_buyer\",\"organization_name\":\"Smoke Co\",\"full_name\":\"Smoke Test\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/dev/null
 sleep 2
 echo "-> read verification mail"
 MSG_ID=$(curl -fsS "$MAIL/api/v1/search?query=to:$EMAIL" | sed -n 's/.*"ID":"\([^"]*\)".*/\1/p' | head -n1)
@@ -19,6 +19,12 @@ echo "-> verify";           curl -fsS -X POST "$BASE/api/auth/verify-email" -H '
 echo "-> login";            curl -fsS -c "$JAR" -X POST "$BASE/api/auth/login" -H 'content-type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/dev/null
 echo "-> me";               curl -fsS -b "$JAR" "$BASE/api/auth/me" | grep -q "$EMAIL"
+echo "-> onboarding gate, then intake form"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/documents")
+[ "$CODE" = "403" ] || { echo "features should be blocked before onboarding, got $CODE"; exit 1; }
+curl -fsS -b "$JAR" -X PUT "$BASE/api/onboarding" -H 'content-type: application/json' \
+  -d '{"answers":{"business_type":"retailer","team_size":"2_5","monthly_sourcing_budget":"5k_25k","product_categories":["electronics","tools"]}}' \
+  | grep -q '"completed":true'
 echo "-> upload documents (clean file + EICAR test file)"
 TMP_DIR="$(mktemp -d)"; trap 'rm -f "$JAR"; rm -rf "$TMP_DIR"' EXIT
 printf 'Quotation\nSupplier: Smoke Metals\nCurrency: EUR\nItem: bracket | Qty 10 | Unit price 2.50\n' > "$TMP_DIR/quote-$$.txt"

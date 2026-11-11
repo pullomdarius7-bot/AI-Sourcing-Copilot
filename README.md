@@ -285,3 +285,27 @@ security and readiness checklists.
 
 Note: the web front end is now published on 127.0.0.1 only (`FRONTEND_BIND`). On a development machine nothing changes
 (http://localhost:3000). To reach it from other machines without a reverse proxy, set `FRONTEND_BIND=0.0.0.0`.
+
+## Phase 1: account types and onboarding
+
+Registration is open: anyone can create an account and chooses what it is.
+
+| Account type | Who it is for | Tenancy |
+|---|---|---|
+| `solo_buyer` | One person sourcing for their own resale business | An organization of one; invitations are refused |
+| `org_buyer` | A procurement team | Members, the five roles and approvals described above |
+| `supplier` | A wholesaler or liquidator listing inventory | Own organization; its staff are invited like any team |
+
+- The account type is stored on the organization (`organizations.account_type`), next to `onboarding_completed`,
+  `onboarding_completed_at` and `onboarding_profile` (JSONB). Roles inside an account are unchanged.
+- After verifying the email and signing in, the first administrator is sent to `/onboarding`: business type,
+  monthly sourcing budget (buyers) or monthly inventory volume (suppliers), team size (buying teams) and product
+  categories. The form is defined in `backend/app/onboarding.py` and served by `GET /api/v1/onboarding`; answers
+  go to `PUT /api/v1/onboarding` and only listed options are stored.
+- Until the form is submitted every feature endpoint answers `403 onboarding_required`. Sign-in, sessions,
+  password and two-factor endpoints keep working. Invited members never see the form.
+- Isolation is unchanged: every tenant table carries `organization_id` under forced row-level security, and a
+  test fails if a table with that column is added without it. The profile lives on the organization row, which
+  a tenant can only read for itself.
+- Migration `0008` adds the columns; organizations that already exist become `org_buyer` with onboarding
+  completed. `alembic downgrade 0007` removes the columns again.

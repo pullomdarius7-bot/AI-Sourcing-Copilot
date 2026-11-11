@@ -13,6 +13,7 @@ from app.db import get_db
 from app.deps import Principal, require_permission
 from app.errors import ApiError, conflict, not_found
 from app.models import AuditLog, Invitation, Organization, User
+from app.onboarding import AccountType
 from app.rbac import Permission, Role
 from app.schemas import (
     AuditOut,
@@ -161,6 +162,8 @@ async def create_invitation(
     p: Principal = Depends(require_permission(Permission.INVITATIONS_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ):
+    if p.org.account_type == AccountType.SOLO_BUYER:
+        raise ApiError(409, "solo_account", "Solo buyer accounts have a single member and cannot invite others")
     email = svc.normalize_email(body.email)
     if await svc.email_in_use(db, email, p.org_id):
         raise ApiError(409, "email_unavailable", "This email address cannot be invited")

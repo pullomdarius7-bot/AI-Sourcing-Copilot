@@ -1,10 +1,30 @@
 export type Role = "requester" | "buyer" | "approver" | "admin" | "auditor";
 export const ROLES: Role[] = ["requester", "buyer", "approver", "admin", "auditor"];
 
+export type AccountType = "solo_buyer" | "org_buyer" | "supplier";
+
+export interface OnboardingField {
+  key: string;
+  label: string;
+  kind: "select" | "multiselect";
+  options: { value: string; label: string }[];
+  help: string;
+}
+
+export interface OnboardingState {
+  account_type: AccountType;
+  completed: boolean;
+  can_edit: boolean;
+  fields: OnboardingField[];
+  profile: Record<string, string | string[]>;
+}
+
 export interface Me {
   id: string;
   organization_id: string;
   organization_name: string;
+  account_type: AccountType;
+  onboarding_completed: boolean;
   email: string;
   full_name: string;
   role: Role;

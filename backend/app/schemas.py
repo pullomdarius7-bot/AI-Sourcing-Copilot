@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from app.onboarding import AccountType
 from app.rbac import Role
 from app.security import password_problem
 
@@ -16,7 +17,9 @@ def _strong(value: str) -> str:
 
 
 class RegisterIn(BaseModel):
-    organization_name: str = Field(min_length=2, max_length=200)
+    account_type: AccountType = AccountType.ORG_BUYER
+    # Solo buyers have no company to name; their account is named after them.
+    organization_name: str | None = Field(default=None, min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
     password: str
@@ -25,6 +28,12 @@ class RegisterIn(BaseModel):
     @classmethod
     def check_password(cls, value: str) -> str:
         return _strong(value)
+
+    @model_validator(mode="after")
+    def check_organization_name(self) -> "RegisterIn":
+        if self.account_type is not AccountType.SOLO_BUYER and not (self.organization_name or "").strip():
+            raise ValueError("Enter the name of your organization")
+        return self
 
 
 class LoginIn(BaseModel):
@@ -106,6 +115,8 @@ class UserOut(BaseModel):
 
 class MeOut(UserOut):
     organization_name: str
+    account_type: AccountType
+    onboarding_completed: bool
     permissions: list[str]
 
 
@@ -121,6 +132,8 @@ class OrgOut(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    account_type: AccountType
+    onboarding_completed: bool
     created_at: datetime
 
 

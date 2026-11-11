@@ -121,4 +121,4 @@ async function handler(req: NextRequest, { params }: { params: { path: string[] 
   return res;
 }
 
-export { handler as GET, handler as POST, handler as PATCH, handler as DELETE };
+export { handler as GET, handler as POST, handler as PUT, handler as PATCH, handler as DELETE };

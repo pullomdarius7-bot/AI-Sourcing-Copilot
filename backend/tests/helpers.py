@@ -33,15 +33,44 @@ def token_from_email(to: str) -> str:
     raise AssertionError(f"no email sent to {to}")
 
 
-async def register_admin(client, email="admin@acme.test", org="Acme Corp", password=PASSWORD):
-    res = await client.post(
-        "/auth/register",
-        json={"organization_name": org, "full_name": "Ada Admin", "email": email, "password": password},
-    )
+ONBOARDING_ANSWERS = {
+    "solo_buyer": {
+        "business_type": "online_marketplace", "monthly_sourcing_budget": "1k_5k",
+        "product_categories": ["apparel", "electronics"],
+    },
+    "org_buyer": {
+        "business_type": "retailer", "team_size": "6_20", "monthly_sourcing_budget": "25k_100k",
+        "product_categories": ["tools", "electronics"],
+    },
+    "supplier": {
+        "business_type": "liquidator", "monthly_inventory_volume": "1_5_truckloads",
+        "product_categories": ["apparel", "tools"],
+    },
+}
+
+
+async def register_admin(
+    client, email="admin@acme.test", org="Acme Corp", password=PASSWORD, account_type="org_buyer", onboard=True
+):
+    """Register, verify and sign in the first user of a new account. onboard=False stops before the intake form."""
+    payload = {"account_type": account_type, "full_name": "Ada Admin", "email": email, "password": password}
+    if org is not None:
+        payload["organization_name"] = org
+    res = await client.post("/auth/register", json=payload)
     assert res.status_code == 201, res.text
     verify = await client.post("/auth/verify-email", json={"token": token_from_email(email)})
     assert verify.status_code == 200, verify.text
-    return await login(client, email, password)
+    account = await login(client, email, password)
+    if onboard:
+        await complete_onboarding(client, account, account_type)
+    return account
+
+
+async def complete_onboarding(client, account: "Account", account_type="org_buyer") -> None:
+    res = await client.put(
+        "/onboarding", json={"answers": ONBOARDING_ANSWERS[account_type]}, headers=account.headers
+    )
+    assert res.status_code == 200, res.text
 
 
 async def login(client, email, password=PASSWORD) -> Account:

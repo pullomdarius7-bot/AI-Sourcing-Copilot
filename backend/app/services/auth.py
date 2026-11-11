@@ -106,14 +106,15 @@ async def _redeem_email_token(db: AsyncSession, raw: str, purpose: str) -> tuple
 
 # --- Registration & verification --------------------------------------------
 async def register(
-    db: AsyncSession, *, organization_name: str, full_name: str, email: str, password: str,
-    client: ClientInfo,
+    db: AsyncSession, *, organization_name: str | None, full_name: str, email: str, password: str,
+    client: ClientInfo, account_type: str = "org_buyer",
 ) -> tuple[User, str | None]:
     await set_system(db)
     email = normalize_email(email)
     if await db.scalar(select(User.id).where(User.email == email)):
         raise conflict("email_taken", "An account with this email already exists")
-    org = Organization(name=organization_name.strip(), slug=slugify(organization_name))
+    org_name = (organization_name or "").strip() or full_name.strip()
+    org = Organization(name=org_name, slug=slugify(org_name), account_type=account_type)
     db.add(org)
     await db.flush()
     user = User(
@@ -129,7 +130,8 @@ async def register(
     raw = None
     if settings.require_email_verification:
         raw = await create_email_token(db, user, VERIFY, timedelta(hours=settings.verify_token_hours))
-    record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip)
+    record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip,
+           meta={"account_type": account_type})
     await db.refresh(user)
     await db.commit()
     return user, raw

@@ -13,7 +13,7 @@ from app import metrics
 from app.config import get_settings
 from app.db import SessionLocal, engine, set_system
 from app.errors import ApiError
-from app.routers import agent, analysis, auth, documents, health, jobs, requirements, rfqs, suppliers, team
+from app.routers import agent, analysis, auth, documents, health, jobs, onboarding, requirements, rfqs, suppliers, team
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -39,7 +39,7 @@ if settings.cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
         allow_credentials=False,
     )
@@ -130,6 +130,7 @@ async def unhandled_error_handler(_: Request, exc: Exception):
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(onboarding.router, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")

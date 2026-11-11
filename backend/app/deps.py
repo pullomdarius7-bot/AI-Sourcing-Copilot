@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db, set_tenant
 from app.errors import forbidden, unauthorized
-from app.models import AuthSession, User
+from app.models import AuthSession, Organization, User
 from app.rbac import Permission, has_permission
 from app.security import TokenError, decode_token
 
@@ -20,6 +20,7 @@ _bearer = HTTPBearer(auto_error=False)
 class Principal:
     user: User
     session: AuthSession
+    org: Organization
     ip: str | None
 
     @property
@@ -49,10 +50,12 @@ async def get_principal(
     await set_tenant(db, org_id)  # all further reads are confined to this organization
     user = await db.get(User, user_id)
     session = await db.get(AuthSession, sid)
+    org = await db.get(Organization, org_id)
     now = datetime.now(UTC)
     if (
         user is None
         or session is None
+        or org is None
         or user.organization_id != org_id
         or not user.is_active
         or session.user_id != user.id
@@ -60,11 +63,14 @@ async def get_principal(
         or session.expires_at <= now
     ):
         raise unauthorized("Session is no longer valid", "invalid_session")
-    return Principal(user=user, session=session, ip=client_ip(request))
+    return Principal(user=user, session=session, org=org, ip=client_ip(request))
 
 
 def require_permission(*permissions: Permission) -> Callable[..., Principal]:
     async def dependency(principal: Principal = Depends(get_principal)) -> Principal:
+        # No product feature is reachable until the account has answered its intake form.
+        if not principal.org.onboarding_completed:
+            raise forbidden("Complete your account profile to continue", "onboarding_required")
         if not all(has_permission(principal.user.role, p) for p in permissions):
             raise forbidden()
         return principal

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
@@ -32,6 +32,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [leaving, setLeaving] = useState(false);
+  const needsOnboarding = me !== null && !me.onboarding_completed;
+
+  useEffect(() => {
+    if (needsOnboarding) router.replace("/onboarding");
+  }, [needsOnboarding, router]);
 
   async function signOut() {
     setLeaving(true);
@@ -43,7 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  if (loading) return <div className="p-8 text-sm text-muted-foreground">Loading your workspace…</div>;
+  if (loading || needsOnboarding) return <div className="p-8 text-sm text-muted-foreground">Loading your workspace…</div>;
   if (error || !me) return <div className="p-8 text-sm text-destructive">{error?.message ?? "Could not load your account."}</div>;
 
   return (
@@ -57,7 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:pb-0">
-            {NAV.filter((n) => !n.permission || me.permissions.includes(n.permission)).map((n) => {
+            {NAV.filter((n) => (!n.permission || me.permissions.includes(n.permission)) && !(n.href === "/team" && me.account_type === "solo_buyer")).map((n) => {
               const active = pathname.startsWith(n.href);
               return (
                 <Link

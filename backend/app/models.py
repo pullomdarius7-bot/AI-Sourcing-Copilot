@@ -55,6 +55,12 @@ class Organization(Base):
     id: Mapped[uuid.UUID] = _pk()
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    # solo_buyer | org_buyer | supplier (app.onboarding.AccountType)
+    account_type: Mapped[str] = mapped_column(String(12), nullable=False, default="org_buyer")
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Intake answers, validated against the account type's form before they are stored.
+    onboarding_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
