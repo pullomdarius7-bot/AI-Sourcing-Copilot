@@ -6,8 +6,8 @@ from app import email as mail
 from app.config import get_settings
 from app.ops import _health, _set_admin
 from tests.helpers import register_admin
-from tests.test_sourcing import fake_web, invite_mail, new_request  # noqa: F401 - fixture
 from tests.market_helpers import buyer
+from tests.test_sourcing import fake_web, invite_mail, new_request  # noqa: F401 - fixture
 
 settings = get_settings()
 
@@ -106,7 +106,7 @@ async def test_trial_extension_and_deactivation(client):
     assert self_off.status_code == 409
 
 
-async def test_invites_can_be_reviewed_resent_and_opt_outs_lifted(client, worker, fake_web, admin_engine):
+async def test_invites_can_be_reviewed_resent_and_opt_outs_lifted(client, worker, fake_web, admin_engine):  # noqa: F811
     shopper = await buyer(client)
     await new_request(client, worker, shopper)
     admin = await owner(client)

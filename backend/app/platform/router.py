@@ -20,7 +20,14 @@ from app.deps import Principal, get_principal
 from app.errors import bad_request, conflict, forbidden, not_found
 from app.jobs import queue
 from app.models import (
-    CreditTransaction, Document, EmailSuppression, Job, Organization, PlatformAudit, SourcingRequest, SupplierInvite,
+    CreditTransaction,
+    Document,
+    EmailSuppression,
+    Job,
+    Organization,
+    PlatformAudit,
+    SourcingRequest,
+    SupplierInvite,
     User,
 )
 from app.platform.health import run_checks

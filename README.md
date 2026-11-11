@@ -13,6 +13,9 @@ No third-party identity provider, no required SaaS.
 - MinIO console: http://localhost:9001 (credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env)
 - API (localhost only): http://127.0.0.1:8000/api/v1/health
 
+On an Android phone without Docker: follow the step-by-step guide in [`docs/TERMUX.md`](docs/TERMUX.md)
+(`bash scripts/termux/setup.sh`, then `start.sh`).
+
 HTTPS: set DOMAIN and APP_BASE_URL, set COOKIE_SECURE=true, then `docker compose --profile tls up -d`.
 Real email: point SMTP_* in .env at your own SMTP relay.
 
@@ -532,3 +535,29 @@ sending; `off` disables them. Invitation and suppression records are platform-le
 
 Team features are also available to team accounts during their free trial. Migration `0013` adds the tables;
 `alembic downgrade 0012` removes them.
+
+## Platform back office (owner only)
+
+The platform owner's view of every account, with health checks and audited manual fixes, at **Back office**
+(`/platform`). Only users marked as platform admins can open it; for everyone else it returns 404. That mark is set
+only from the server's command line, never through the website:
+
+    python -m app.ops grant-platform-admin you@example.com      # Docker: docker compose exec backend python -m app.ops ...
+    python -m app.ops revoke-platform-admin someone@example.com
+    python -m app.ops list-platform-admins
+    python -m app.ops health                                    # the same health checks, in the terminal
+
+With `PLATFORM_ADMIN_REQUIRES_MFA=true` (the default) platform admins must turn on two-factor sign-in first.
+
+| Tab | What it does |
+|---|---|
+| Health | Platform totals and checks for the database, migrations, file storage, background worker, failed jobs, AI providers, web search, Stripe, email, supplier invitations and virus scanning (OK / WARN / FAIL) |
+| Accounts | Search by business name, user email or Stripe customer id; see users, plan and credit history; add or remove credits, extend a trial, deactivate a user (signs them out everywhere) |
+| Invitations | Every web-found supplier with its real identity (never shown to buyers); resend now (skips the cooldown and daily cap, never an opt-out) or hold |
+| Opt-outs | Unsubscribed addresses and domains; lift one at the business's written request |
+| Jobs | Background jobs across all accounts; retry failed ones |
+| Audit | Every back-office action with the admin, time and the reason they gave |
+
+Every change asks for a reason and is written to `platform_audit`, which only the system can read or write
+(customers cannot see it, and it is never updated or deleted). Migration `0015` adds `users.is_platform_admin` and
+`platform_audit`; `alembic downgrade 0014` removes them.
