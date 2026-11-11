@@ -25,7 +25,7 @@ def parameter_text(param: dict[str, Any]) -> str:
     if param.get("unknown"):
         return f"{label}: not specified – please state"
     value = param.get("value")
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, int | float) and not isinstance(value, bool):
         text = format_number(float(value))
     else:
         text = str(value)

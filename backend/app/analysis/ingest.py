@@ -79,7 +79,7 @@ def parse_number(value: Any, decimal: str | None = None) -> Decimal | None:
     ("1,000", "5.000") is read with the file's convention and is left empty when the file gives none."""
     if value is None or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float, Decimal)):
+    if isinstance(value, int | float | Decimal):
         return Decimal(str(value))
     text = _clean(value)
     if text is None:

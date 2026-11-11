@@ -32,8 +32,9 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def enqueue_pipeline(db: AsyncSession, doc: Document) -> None:
-    await queue.enqueue(
+async def enqueue_pipeline(db: AsyncSession, doc: Document) -> Job | None:
+    """Queue the scan job that starts the pipeline. None if one is already active for this document."""
+    return await queue.enqueue(
         db, org_id=doc.organization_id, kind=SCAN, payload={"document_id": str(doc.id)},
         dedupe_key=f"{SCAN}:{doc.id}",
     )

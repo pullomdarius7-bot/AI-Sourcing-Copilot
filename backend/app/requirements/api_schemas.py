@@ -175,12 +175,17 @@ class ApproveIn(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+# Stored for audit only. The rejected model output must never reach clients, not even as detail.
+_INTERNAL_DETAIL_KEYS = frozenset({"discarded_model_claim"})
+
+
 def _evidence(item: Requirement | Parameter) -> dict[str, Any]:
+    detail = {k: v for k, v in (item.confidence_detail or {}).items() if k not in _INTERNAL_DETAIL_KEYS}
     return dict(
         source_quote=item.source_quote, source_start=item.source_start, source_end=item.source_end,
         source_line=item.source_line, source_section=item.source_section, confidence=item.confidence,
         model_confidence=item.model_confidence, confidence_bucket=bucket(item.confidence),
-        confidence_detail=item.confidence_detail, grounding_status=item.grounding_status, flags=item.flags,
+        confidence_detail=detail, grounding_status=item.grounding_status, flags=item.flags,
         validation_state=item.validation_state, verified=item.validation_state in ("verified", "corrected"),
         verified_by=item.verified_by, verified_at=item.verified_at, review_note=item.review_note,
         original=item.original,

@@ -135,5 +135,20 @@ def validate(blocks: list[dict[str, Any]], unknowns: list[str], follow_ups: list
     return Checked(kept, clean_unknowns, clean_follow, problems)
 
 
+def clarifications(messages: list[str]) -> list[str]:
+    """Clarifying questions raised by the tools themselves, made safe to show.
+
+    They are fixed text plus the user's own reference or real record names, never model output, so they skip the
+    number check that ``validate`` applies to unknowns (their example "RFQ-2026-0001" is in no source and would be
+    dropped, leaving the user with no idea what to clarify). Markup is still refused.
+    """
+    out = []
+    for m in messages:
+        text = clean_text(str(m))[:300]
+        if text and not _MARKUP.search(text):
+            out.append(text)
+    return out
+
+
 def _fmt(values: set[Decimal]) -> str:
     return ", ".join(sorted(format(v, "f") for v in values))[:120]

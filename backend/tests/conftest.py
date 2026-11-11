@@ -33,11 +33,16 @@ os.environ["REQUIRE_EMAIL_VERIFICATION"] = "true"
 
 import asyncio  # noqa: E402
 
+import email_validator  # noqa: E402
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+
+# Test addresses use the reserved .test TLD (RFC 2606), which email-validator rejects
+# unless told it is running under tests. Production keeps rejecting reserved domains.
+email_validator.TEST_ENVIRONMENT = True
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app import email as mail  # noqa: E402

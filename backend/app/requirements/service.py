@@ -131,6 +131,9 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
         tokens_out += result.output_tokens or 0
 
     grounded = gr.finalize(all_reqs, all_unspecified, run_flags)
+    # The models declare no relationships, so the unit of work does not know parameters depend on
+    # requirements and may insert them first. Flush the requirements before adding their parameters.
+    param_rows: list[Parameter] = []
     for position, req in enumerate(grounded.requirements):
         req_id = uuid.uuid4()
         db.add(
@@ -143,10 +146,10 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
                 grounding_status="grounded", flags=req.flags,
             )
         )
-        for pos, prm in enumerate(req.params):
-            db.add(_parameter_row(run, doc, prm, req_id, pos))
-    for pos, prm in enumerate(grounded.unknowns):
-        db.add(_parameter_row(run, doc, prm, None, pos))
+        param_rows += [_parameter_row(run, doc, prm, req_id, pos) for pos, prm in enumerate(req.params)]
+    param_rows += [_parameter_row(run, doc, prm, None, pos) for pos, prm in enumerate(grounded.unknowns)]
+    await db.flush()
+    db.add_all(param_rows)
 
     run.flags = grounded.flags
     run.input_tokens, run.output_tokens = tokens_in, tokens_out

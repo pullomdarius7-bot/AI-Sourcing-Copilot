@@ -274,6 +274,7 @@ async def test_answers_never_cross_organizations(client, worker):
 
 async def test_per_user_rate_limit(client, monkeypatch):
     o = await org(client)
+    monkeypatch.setattr(framework.settings, "rate_limit_enabled", True)  # conftest switches limits off globally
     monkeypatch.setattr(framework.settings, "agent_rate_per_minute", 2)
     for _ in range(2):
         await ask(client, o.buyer, "What is CIF?")

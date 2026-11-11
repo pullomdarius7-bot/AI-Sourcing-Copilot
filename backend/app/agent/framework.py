@@ -179,6 +179,8 @@ async def _answer(db: AsyncSession, p: Principal, conversation: AgentConversatio
     if not final.blocks:
         if clarify:
             run.status, notice = "clarify", CLARIFY_NOTICE
+            asks = safety.clarifications([t.get("error", "") for t in clarify])
+            final.unknowns[:] = list(dict.fromkeys(asks + final.unknowns))
         elif any(t.get("exception") for t in traces):
             run.status = "error"
         if not final.unknowns:

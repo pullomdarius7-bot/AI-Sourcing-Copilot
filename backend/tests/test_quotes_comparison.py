@@ -143,7 +143,7 @@ async def test_comparison_ranks_verified_quotes_and_is_stored(client, worker):
 async def test_custom_weights_and_validation(client, worker):
     o, rfq, (a, b, c), _ = await three_way(client, worker)
     lead_heavy = (await client.post(f"/rfqs/{rfq['id']}/comparisons", json={"weights": {"lead_time": 1}}, headers=o.buyer.headers)).json()
-    assert lead_heavy["result"]["weights"] == {"price": 0.0, "lead_time": 1.0, "coverage": 0.0, "qualification": 0.0}
+    assert lead_heavy["result"]["weights"] == {"price": 0.0, "lead_time": 1.0, "coverage": 0.0, "qualification": 0.0, "risk": 0.0}
     assert lead_heavy["result"]["ranking"][-1]["supplier_name"] == "Kessler GmbH"
     bad = await client.post(f"/rfqs/{rfq['id']}/comparisons", json={"weights": {"price": -1}}, headers=o.buyer.headers)
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_weights"
