@@ -111,6 +111,7 @@ class UserOut(BaseModel):
 
 
 class MeOut(UserOut):
+    is_platform_admin: bool = False
     organization_name: str
     account_type: AccountType
     onboarding_completed: bool

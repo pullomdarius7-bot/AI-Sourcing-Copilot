@@ -88,7 +88,7 @@ async def clean_state(admin_engine):
     async with admin_engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE api_keys, sourcing_candidates, supplier_invites, email_suppressions, rfq_moderation, rfq_thread_events, rfq_threads, lot_analyses, lot_private_details, lot_items, marketplace_lots, market_profiles, stripe_events, knowledge_chunks, agent_reports, agent_messages, agent_runs, agent_conversations, award_recommendations, fx_rates, unit_conversions, counters, domain_events, comparisons, rfq_quote_lines, rfq_quotes, rfq_packages, rfq_suppliers, rfq_items, rfqs, "
+                "TRUNCATE platform_audit, guest_quotes, api_keys, sourcing_candidates, supplier_invites, email_suppressions, rfq_moderation, rfq_thread_events, rfq_threads, lot_analyses, lot_private_details, lot_items, marketplace_lots, market_profiles, stripe_events, knowledge_chunks, agent_reports, agent_messages, agent_runs, agent_conversations, award_recommendations, fx_rates, unit_conversions, counters, domain_events, comparisons, rfq_quote_lines, rfq_quotes, rfq_packages, rfq_suppliers, rfq_items, rfqs, "
                 "supplier_qualification_checks, qualification_criteria, supplier_contacts, supplier_category_links, supplier_categories, suppliers, "
                 "review_events, parameters, requirements, extraction_runs, jobs, ai_audit_logs, document_extractions, documents, audit_logs, "
                 "mfa_recovery_codes, email_tokens, auth_sessions, invitations, users, "

@@ -58,6 +58,7 @@ export interface OnboardingState {
 
 export interface Me {
   id: string;
+  is_platform_admin?: boolean;
   organization_id: string;
   organization_name: string;
   account_type: AccountType;

@@ -168,6 +168,7 @@ async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(g
     return MeOut(
         **data,
         organization_name=p.org.name,
+        is_platform_admin=p.user.is_platform_admin,
         account_type=p.org.account_type,
         onboarding_completed=p.org.onboarding_completed,
         credit_balance=p.org.credit_balance,

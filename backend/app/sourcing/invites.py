@@ -148,20 +148,30 @@ def invite_email(invite: SupplierInvite, token: str) -> tuple[str, str]:
 async def handle_send(db: AsyncSession, job) -> dict[str, Any]:
     await set_system(db)
     invite = await db.get(SupplierInvite, uuid.UUID(job.payload["invite_id"]), with_for_update=True)
-    if invite is None or invite.status in ("suppressed", "joined"):
-        return {"skipped": invite.status if invite else "missing"}
+    if invite is None:
+        return {"skipped": "missing"}
+    outcome = await deliver(db, invite)
+    await db.commit()
+    return outcome
+
+
+async def deliver(db: AsyncSession, invite: SupplierInvite, *, force: bool = False) -> dict[str, Any]:
+    """Send one invitation (system context, invite locked; caller commits). force=True skips the cooldown and the
+    daily cap (a platform admin resending by hand); it never overrides an opt-out, the postal address or the mode."""
+    if invite.status in ("suppressed", "joined"):
+        return {"skipped": invite.status}
     if settings.supplier_invites != "auto":
         invite.status, invite.status_note = "held", "Invitations are in review mode"
     elif not settings.invite_sender_postal_address.strip():
         invite.status, invite.status_note = "held", "Set INVITE_SENDER_POSTAL_ADDRESS to send invitations"
     elif await _suppressed(db, invite.email, invite.domain):
         invite.status = "suppressed"
-    elif invite.last_sent_at and invite.last_sent_at > _now() - timedelta(days=settings.invite_cooldown_days):
+    elif not force and invite.last_sent_at and invite.last_sent_at > _now() - timedelta(days=settings.invite_cooldown_days):
         return {"skipped": "cooldown"}
     else:
         sent_today = await db.scalar(select(func.count()).select_from(SupplierInvite).where(
             SupplierInvite.last_sent_at > _now() - timedelta(days=1))) or 0
-        if sent_today >= settings.invite_daily_limit:
+        if not force and sent_today >= settings.invite_daily_limit:
             invite.status, invite.status_note = "held", "Daily invitation limit reached"
         else:
             subject, body = invite_email(invite, token_for(invite.id))
@@ -170,7 +180,6 @@ async def handle_send(db: AsyncSession, job) -> dict[str, Any]:
             invite.sent_count += 1
             invite.last_sent_at = _now()
     invite.updated_at = _now()
-    await db.commit()
     return {"status": invite.status}
 
 

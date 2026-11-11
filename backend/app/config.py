@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     topup_available_at_or_below: int = 5
     # People (active users plus open invitations) an organization buyer account may have before it subscribes.
     trial_seats: int = 5
+    # Back office: platform admins must have two-factor sign-in on (strongly recommended on any public server).
+    platform_admin_requires_mfa: bool = True
     # Where customers write for help; Sourcing Team requests are marked as priority.
     support_email: str = ""
 

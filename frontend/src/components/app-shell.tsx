@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Building2, Calculator, ClipboardCheck, CreditCard, Inbox, MessagesSquare, PackageOpen, Radar, SlidersHorizontal, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, Calculator, ClipboardCheck, CreditCard, Inbox, MessagesSquare, PackageOpen, Radar, SlidersHorizontal, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users, Wrench } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,7 @@ const NAV: { href: string; label: string; icon: typeof LayoutDashboard; permissi
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },
   { href: "/security", label: "Security", icon: ShieldCheck, permission: null },
+  { href: "/platform", label: "Back office", icon: Wrench, permission: null },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -76,6 +77,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               const side: Side = me.account_type === "supplier" ? "supplier" : "buyer";
               if (n.permission && !me.permissions.includes(n.permission)) return false;
               if (n.side && n.side !== side) return false;
+              if (n.href === "/platform") return Boolean(me.is_platform_admin);
               return !(n.href === "/team" && me.account_type === "solo_buyer");
             }).map((n) => {
               const active = pathname.startsWith(n.href);

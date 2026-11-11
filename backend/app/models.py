@@ -91,6 +91,8 @@ class User(TenantMixin, Base):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Runs the platform (back office). Set only from the command line: python -m app.ops grant-platform-admin
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     mfa_secret_enc: Mapped[str | None] = mapped_column(Text)
@@ -1126,3 +1128,19 @@ class ApiKey(TenantMixin, Base):
     created_at: Mapped[datetime] = _created()
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlatformAudit(Base):
+    """Append-only record of everything done in the back office."""
+
+    __tablename__ = "platform_audit"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    actor_email: Mapped[str | None] = mapped_column(String(320))
+    action: Mapped[str] = mapped_column(String(60), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(30))
+    target_id: Mapped[str | None] = mapped_column(String(320))
+    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    ip: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = _created()

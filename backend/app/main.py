@@ -13,6 +13,7 @@ from app import metrics
 from app.config import get_settings
 from app.db import SessionLocal, engine, set_system
 from app.errors import ApiError
+from app.platform.router import router as platform_router
 from app.routers import (
     agent,
     analysis,
@@ -160,3 +161,4 @@ app.include_router(suppliers.router, prefix="/api/v1")
 app.include_router(rfqs.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
+app.include_router(platform_router, prefix="/api/v1")
