@@ -168,6 +168,8 @@ async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(g
         organization_name=p.org.name,
         account_type=p.org.account_type,
         onboarding_completed=p.org.onboarding_completed,
+        credit_balance=p.org.credit_balance,
+        trial_ends_at=p.org.trial_ends_at,
         permissions=permissions_for(p.user.role),
     )
 

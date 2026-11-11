@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     reset_token_minutes: int = 60
     invite_token_days: int = 7
 
+    # --- Free trial: ends after trial_days or trial_credits analyses, whichever comes first ---
+    trial_days: int = 7
+    trial_credits: int = 10
+
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 30
     cors_origins: str = ""

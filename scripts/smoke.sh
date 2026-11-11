@@ -23,8 +23,11 @@ echo "-> onboarding gate, then intake form"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/documents")
 [ "$CODE" = "403" ] || { echo "features should be blocked before onboarding, got $CODE"; exit 1; }
 curl -fsS -b "$JAR" -X PUT "$BASE/api/onboarding" -H 'content-type: application/json' \
-  -d '{"answers":{"business_type":"retailer","team_size":"2_5","monthly_sourcing_budget":"5k_25k","product_categories":["electronics","tools"]}}' \
+  -d '{"account_type":"org_buyer","organization_name":"Smoke Co","answers":{"product_categories":["power_tools","footwear"],"monthly_budget":"5k_25k","lot_sizes":["pallets"]}}' \
   | grep -q '"completed":true'
+curl -fsS -b "$JAR" "$BASE/api/auth/me" | grep -q '"credit_balance":10' || { echo "trial credits were not granted"; exit 1; }
+echo "-> public landing page"
+curl -fsS "$BASE/" | grep -q 'Stop guessing on blind pallets' || { echo "landing page is not served at /"; exit 1; }
 echo "-> upload documents (clean file + EICAR test file)"
 TMP_DIR="$(mktemp -d)"; trap 'rm -f "$JAR"; rm -rf "$TMP_DIR"' EXIT
 printf 'Quotation\nSupplier: Smoke Metals\nCurrency: EUR\nItem: bracket | Qty 10 | Unit price 2.50\n' > "$TMP_DIR/quote-$$.txt"

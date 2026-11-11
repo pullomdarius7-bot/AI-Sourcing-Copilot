@@ -27,6 +27,16 @@ const NAV = [
   { href: "/security", label: "Security", icon: ShieldCheck, permission: null },
 ];
 
+function TrialBadge({ balance, endsAt }: { balance: number; endsAt: string }) {
+  const days = Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000);
+  if (days <= 0 || balance <= 0) return <Badge variant="caution" className="mr-auto">Free trial ended</Badge>;
+  return (
+    <Badge variant="default" className="mr-auto">
+      Free trial: {balance} {balance === 1 ? "analysis" : "analyses"} left · {days} {days === 1 ? "day" : "days"}
+    </Badge>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: me, error, loading } = useFetch<Me>("auth/me");
   const pathname = usePathname();
@@ -83,6 +93,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
         <div className="min-w-0">
           <header className="flex items-center justify-end gap-3 border-b bg-card px-6 py-3">
+            {me.trial_ends_at && <TrialBadge balance={me.credit_balance} endsAt={me.trial_ends_at} />}
             <div className="text-right">
               <p className="text-sm font-medium leading-tight">{me.full_name}</p>
               <p className="text-xs text-muted-foreground">{me.email}</p>

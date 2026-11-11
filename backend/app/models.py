@@ -61,6 +61,9 @@ class Organization(Base):
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Intake answers, validated against the account type's form before they are stored.
     onboarding_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Analysis credits left. Changed only by app.billing.ledger, together with a credit_ledgers row.
+    credit_balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -162,6 +165,22 @@ class AuditLog(TenantMixin, Base):
     action: Mapped[str] = mapped_column(String(80), nullable=False)
     ip: Mapped[str | None] = mapped_column(String(64))
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = _created()
+
+
+class CreditLedger(TenantMixin, Base):
+    """Append-only record of every credit granted or spent (one credit = one manifest analysis)."""
+
+    __tablename__ = "credit_ledgers"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    # trial_grant | plan_grant | purchase | usage | refund | adjustment | expiry
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    delta: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(120))
+    note: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = _created()
 
 

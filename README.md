@@ -286,9 +286,27 @@ security and readiness checklists.
 Note: the web front end is now published on 127.0.0.1 only (`FRONTEND_BIND`). On a development machine nothing changes
 (http://localhost:3000). To reach it from other machines without a reverse proxy, set `FRONTEND_BIND=0.0.0.0`.
 
-## Phase 1: account types and onboarding
+## Phases 1-2: public site, account types, onboarding and trial credits
 
-Registration is open: anyone can create an account and chooses what it is.
+**Public landing page.** `/` is the public marketing page (hero, who it is for, comparison, how it works, pricing).
+Signed-in visitors are sent to `/dashboard`. Its calls to action link to `/register?tier=trial`,
+`/register?role=org_buyer` and `/register?role=supplier`. Copy and prices live in
+`frontend/src/components/landing/`.
+
+**Registration.** Open to anyone: name, email and password. The `role` link parameter only pre-selects a role.
+
+**Onboarding wizard (`/onboarding`).** After verifying the email and signing in, the first administrator of an
+account is sent through three steps. Until it is finished every feature endpoint answers
+`403 onboarding_required`; sign-in, sessions, password and two-factor endpoints keep working.
+
+1. Role: `solo_buyer`, `org_buyer` or `supplier`. Fixed once onboarding is complete.
+2. Categories and scale. Buyers: product categories, monthly purchasing budget, preferred lot sizes. Suppliers:
+   inventory types, typical manifest format, dispatch regions. Team and supplier accounts also name their company.
+3. Provisioning: the answers are saved, `onboarding_completed` is set, the free trial starts and the user lands
+   on the dashboard.
+
+The roles, questions and allowed answers are defined in `backend/app/onboarding.py`, served by
+`GET /api/v1/onboarding` and submitted to `PUT /api/v1/onboarding`; only listed options are stored.
 
 | Account type | Who it is for | Tenancy |
 |---|---|---|
@@ -296,16 +314,16 @@ Registration is open: anyone can create an account and chooses what it is.
 | `org_buyer` | A procurement team | Members, the five roles and approvals described above |
 | `supplier` | A wholesaler or liquidator listing inventory | Own organization; its staff are invited like any team |
 
-- The account type is stored on the organization (`organizations.account_type`), next to `onboarding_completed`,
-  `onboarding_completed_at` and `onboarding_profile` (JSONB). Roles inside an account are unchanged.
-- After verifying the email and signing in, the first administrator is sent to `/onboarding`: business type,
-  monthly sourcing budget (buyers) or monthly inventory volume (suppliers), team size (buying teams) and product
-  categories. The form is defined in `backend/app/onboarding.py` and served by `GET /api/v1/onboarding`; answers
-  go to `PUT /api/v1/onboarding` and only listed options are stored.
-- Until the form is submitted every feature endpoint answers `403 onboarding_required`. Sign-in, sessions,
-  password and two-factor endpoints keep working. Invited members never see the form.
-- Isolation is unchanged: every tenant table carries `organization_id` under forced row-level security, and a
-  test fails if a table with that column is added without it. The profile lives on the organization row, which
-  a tenant can only read for itself.
-- Migration `0008` adds the columns; organizations that already exist become `org_buyer` with onboarding
-  completed. `alembic downgrade 0007` removes the columns again.
+**Data model.** The account type, `onboarding_completed`, `onboarding_completed_at` and `onboarding_profile`
+(JSONB) are columns of `organizations` (migration `0008`). Organizations that existed before became `org_buyer`
+with onboarding completed and no trial.
+
+**Credits and trial.** One credit is one manifest analysis. `credit_ledgers` (migration `0009`) is the
+append-only record of every grant and charge; `organizations.credit_balance` is the running balance. Both are
+changed only by `backend/app/billing/ledger.py`, in one transaction, with the organization row locked: the
+balance cannot go below zero, concurrent charges cannot overspend, and a charge or grant carrying a `reference`
+is applied once. Finishing onboarding grants `TRIAL_CREDITS` (10) and sets `trial_ends_at` to `TRIAL_DAYS` (7)
+from now, once per account. Nothing spends credits yet: charging the AI calls is Phase 3.
+
+**Isolation.** Every tenant table carries `organization_id` under forced row-level security, and a test fails if
+a table with that column is added without it. `alembic downgrade 0007` removes everything in this section.

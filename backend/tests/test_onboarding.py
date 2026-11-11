@@ -28,13 +28,11 @@ async def test_solo_buyer_needs_no_organization_name(client):
     assert me["organization_name"] == "Ada Admin"
 
 
-@pytest.mark.parametrize("account_type", ["org_buyer", "supplier"])
-async def test_team_and_supplier_accounts_need_an_organization_name(client, account_type):
+async def test_signup_without_a_role_defaults_to_solo_buyer_until_the_wizard(client):
     res = await client.post(
-        "/auth/register",
-        json={"account_type": account_type, "full_name": "Ada", "email": "a@acme.test", "password": PASSWORD},
+        "/auth/register", json={"full_name": "Ada", "email": "a@acme.test", "password": PASSWORD}
     )
-    assert res.status_code == 422, res.text
+    assert res.status_code == 201, res.text
 
 
 async def test_unknown_account_type_is_rejected(client):
@@ -71,32 +69,27 @@ async def test_form_matches_account_type_and_answers_are_stored(client, account_
     form = (await client.get("/onboarding", headers=account.headers)).json()
     assert form["account_type"] == account_type
     assert form["completed"] is False and form["can_edit"] is True
-    assert {f["key"] for f in form["fields"]} == set(ONBOARDING_ANSWERS[account_type])
+    assert [r["value"] for r in form["roles"]] == ACCOUNT_TYPES
+    assert {f["key"] for f in form["forms"][account_type]} == set(ONBOARDING_ANSWERS[account_type])
 
     await complete_onboarding(client, account, account_type)
     after = (await client.get("/onboarding", headers=account.headers)).json()
     assert after["completed"] is True
-    assert after["profile"]["business_type"] == ONBOARDING_ANSWERS[account_type]["business_type"]
-    assert after["profile"]["product_categories"] == sorted(ONBOARDING_ANSWERS[account_type]["product_categories"])
+    assert after["profile"] == {
+        k: sorted(v) if isinstance(v, list) else v for k, v in ONBOARDING_ANSWERS[account_type].items()
+    }
     assert (await client.get("/auth/me", headers=account.headers)).json()["onboarding_completed"] is True
-
-
-def test_supplier_is_asked_for_volume_and_buyers_for_budget():
-    assert "monthly_inventory_volume" in ONBOARDING_ANSWERS["supplier"]
-    assert "monthly_sourcing_budget" not in ONBOARDING_ANSWERS["supplier"]
-    assert "monthly_sourcing_budget" in ONBOARDING_ANSWERS["solo_buyer"]
-    assert "team_size" in ONBOARDING_ANSWERS["org_buyer"] and "team_size" not in ONBOARDING_ANSWERS["solo_buyer"]
 
 
 @pytest.mark.parametrize(
     "change",
     [
-        {"business_type": "astronaut"},  # not an option
+        {"monthly_budget": "a_lot"},  # not an option
         {"product_categories": []},  # nothing chosen
-        {"product_categories": ["apparel", "weapons"]},  # one unknown option
-        {"product_categories": "apparel"},  # wrong shape
-        {"monthly_sourcing_budget": None},  # missing
-        {"monthly_inventory_volume": "1_5_truckloads"},  # a supplier question on a buyer form
+        {"product_categories": ["footwear", "weapons"]},  # one unknown option
+        {"product_categories": "footwear"},  # wrong shape
+        {"lot_sizes": None},  # missing
+        {"dispatch_regions": ["midwest"]},  # a supplier question on a buyer form
         {"is_admin": "true"},  # arbitrary key
     ],
 )
@@ -123,6 +116,144 @@ async def test_onboarding_is_audited(client):
     admin = await register_admin(client)
     actions = [e["action"] for e in (await client.get("/audit-logs", headers=admin.headers)).json()]
     assert "onboarding.completed" in actions
+
+
+# --- Role selection (wizard step 1) --------------------------------------------------------------------
+async def test_role_chosen_in_the_wizard_replaces_the_signup_hint(client):
+    account = await register_admin(client, account_type="solo_buyer", org=None, onboard=False)
+    res = await client.put(
+        "/onboarding",
+        json={"account_type": "supplier", "organization_name": "Pallet Kings", "answers": ONBOARDING_ANSWERS["supplier"]},
+        headers=account.headers,
+    )
+    assert res.status_code == 200, res.text
+    me = (await client.get("/auth/me", headers=account.headers)).json()
+    assert (me["account_type"], me["organization_name"]) == ("supplier", "Pallet Kings")
+
+
+async def test_answers_must_match_the_role_chosen_in_the_wizard(client):
+    account = await register_admin(client, account_type="solo_buyer", onboard=False)
+    res = await client.put(
+        "/onboarding", json={"account_type": "supplier", "answers": ONBOARDING_ANSWERS["solo_buyer"]},
+        headers=account.headers,
+    )
+    assert res.status_code == 422, res.text
+    assert (await client.get("/auth/me", headers=account.headers)).json()["account_type"] == "solo_buyer"
+
+
+async def test_account_type_is_locked_once_onboarding_is_complete(client):
+    account = await register_admin(client, account_type="solo_buyer")
+    res = await client.put(
+        "/onboarding", json={"account_type": "org_buyer", "answers": ONBOARDING_ANSWERS["org_buyer"]},
+        headers=account.headers,
+    )
+    assert res.status_code == 409, res.text
+    assert res.json()["error"]["code"] == "account_type_locked"
+
+
+# --- Trial provisioning (wizard step 3) ----------------------------------------------------------------
+@pytest.mark.parametrize("account_type", ACCOUNT_TYPES)
+async def test_onboarding_starts_the_trial_with_ten_analyses_for_seven_days(client, admin_engine, account_type):
+    from datetime import UTC, datetime, timedelta
+
+    account = await register_admin(client, account_type=account_type, onboard=False)
+    before = (await client.get("/auth/me", headers=account.headers)).json()
+    assert (before["credit_balance"], before["trial_ends_at"]) == (0, None)
+
+    await complete_onboarding(client, account, account_type)
+    me = (await client.get("/auth/me", headers=account.headers)).json()
+    assert me["credit_balance"] == 10
+    ends = datetime.fromisoformat(me["trial_ends_at"])
+    assert timedelta(days=6, hours=23) < ends - datetime.now(UTC) <= timedelta(days=7)
+    async with admin_engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT kind, delta, balance_after, reference FROM credit_ledgers"))).all()
+    assert [tuple(r) for r in rows] == [("trial_grant", 10, 10, "trial")]
+
+
+async def test_resubmitting_the_profile_never_grants_a_second_trial(client, admin_engine):
+    account = await register_admin(client)
+    first = (await client.get("/auth/me", headers=account.headers)).json()
+    await complete_onboarding(client, account)
+    await complete_onboarding(client, account)
+    me = (await client.get("/auth/me", headers=account.headers)).json()
+    assert (me["credit_balance"], me["trial_ends_at"]) == (10, first["trial_ends_at"])
+    async with admin_engine.connect() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM credit_ledgers")) == 1
+
+
+async def test_simultaneous_submissions_grant_one_trial(client, admin_engine):
+    import asyncio
+
+    account = await register_admin(client, onboard=False)
+    await asyncio.gather(*(complete_onboarding(client, account) for _ in range(5)))
+    async with admin_engine.connect() as conn:
+        assert await conn.scalar(text("SELECT count(*) FROM credit_ledgers")) == 1
+        assert await conn.scalar(text("SELECT credit_balance FROM organizations")) == 10
+
+
+# --- Credit ledger -------------------------------------------------------------------------------------
+async def _post(org_id, delta, kind, **kw):
+    from app.billing import ledger
+    from app.db import SessionLocal, set_tenant
+
+    async with SessionLocal() as db:
+        await set_tenant(db, org_id)
+        entry = await ledger.post(db, org_id, delta, kind, **kw)
+        await db.commit()
+        return entry.balance_after
+
+
+async def test_ledger_spends_down_to_zero_and_then_refuses(client):
+    from app.billing.ledger import InsufficientCredits
+
+    account = await register_admin(client)
+    for expected in range(9, -1, -1):
+        assert await _post(account.org_id, -1, "usage") == expected
+    with pytest.raises(InsufficientCredits):
+        await _post(account.org_id, -1, "usage")
+    assert (await client.get("/auth/me", headers=account.headers)).json()["credit_balance"] == 0
+
+
+async def test_ledger_charge_with_the_same_reference_is_applied_once(client):
+    account = await register_admin(client)
+    assert await _post(account.org_id, -1, "usage", reference="job:42") == 9
+    assert await _post(account.org_id, -1, "usage", reference="job:42") == 9
+    assert (await client.get("/auth/me", headers=account.headers)).json()["credit_balance"] == 9
+
+
+async def test_concurrent_charges_cannot_overspend(client):
+    import asyncio
+
+    from app.billing.ledger import InsufficientCredits
+
+    account = await register_admin(client)
+    results = await asyncio.gather(*(_post(account.org_id, -1, "usage") for _ in range(15)), return_exceptions=True)
+    assert sum(1 for r in results if isinstance(r, int)) == 10
+    assert sum(1 for r in results if isinstance(r, InsufficientCredits)) == 5
+    assert (await client.get("/auth/me", headers=account.headers)).json()["credit_balance"] == 0
+
+
+async def test_ledger_is_tenant_isolated_and_append_only(client):
+    from sqlalchemy.exc import ProgrammingError
+
+    from app.db import SessionLocal, set_tenant
+
+    a = await register_admin(client, email="a@acme.test", org="Acme")
+    b = await register_admin(client, email="b@globex.test", org="Globex")
+    async with SessionLocal() as db:
+        await set_tenant(db, a.org_id)
+        orgs = (await db.execute(text("SELECT DISTINCT organization_id::text FROM credit_ledgers"))).scalars().all()
+        assert orgs == [a.org_id]
+        with pytest.raises(ProgrammingError):  # WITH CHECK: cannot write into another tenant
+            await db.execute(text(
+                "INSERT INTO credit_ledgers (organization_id, kind, delta, balance_after) "
+                f"VALUES ('{b.org_id}', 'adjustment', 1000, 1000)"
+            ))
+    for statement in ("UPDATE credit_ledgers SET delta = 1000", "DELETE FROM credit_ledgers"):
+        async with SessionLocal() as db:
+            await set_tenant(db, a.org_id)
+            with pytest.raises(ProgrammingError):
+                await db.execute(text(statement))
 
 
 # --- Account type rules ------------------------------------------------------------------------------
@@ -176,3 +307,11 @@ async def test_new_organizations_default_to_not_onboarded(admin_engine):
             "RETURNING account_type, onboarding_completed, onboarding_profile"
         ))).one()
     assert (row[0], row[1], row[2]) == ("org_buyer", False, {})
+
+
+async def test_database_refuses_a_negative_balance(admin_engine):
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError):
+        async with admin_engine.begin() as conn:
+            await conn.execute(text("INSERT INTO organizations (name, slug, credit_balance) VALUES ('x', 'x-neg', -1)"))

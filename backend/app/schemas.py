@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.onboarding import AccountType
 from app.rbac import Role
@@ -17,8 +17,9 @@ def _strong(value: str) -> str:
 
 
 class RegisterIn(BaseModel):
-    account_type: AccountType = AccountType.ORG_BUYER
-    # Solo buyers have no company to name; their account is named after them.
+    # A hint from the page the visitor signed up on; the role is confirmed in the onboarding wizard.
+    account_type: AccountType = AccountType.SOLO_BUYER
+    # Optional: an account without a company name is named after its owner.
     organization_name: str | None = Field(default=None, min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
@@ -28,12 +29,6 @@ class RegisterIn(BaseModel):
     @classmethod
     def check_password(cls, value: str) -> str:
         return _strong(value)
-
-    @model_validator(mode="after")
-    def check_organization_name(self) -> "RegisterIn":
-        if self.account_type is not AccountType.SOLO_BUYER and not (self.organization_name or "").strip():
-            raise ValueError("Enter the name of your organization")
-        return self
 
 
 class LoginIn(BaseModel):
@@ -117,6 +112,8 @@ class MeOut(UserOut):
     organization_name: str
     account_type: AccountType
     onboarding_completed: bool
+    credit_balance: int
+    trial_ends_at: datetime | None
     permissions: list[str]
 
 

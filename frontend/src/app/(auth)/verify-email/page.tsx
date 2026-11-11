@@ -29,10 +29,10 @@ export default function VerifyEmailPage() {
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Email verification</h1>
       {state === "working" && <p className="text-sm text-muted-foreground">Verifying…</p>}
-      {state === "ok" && <Alert variant="success">Your email address is verified. You can sign in now.</Alert>}
+      {state === "ok" && <Alert variant="success">Your email address is verified. Sign in to finish setting up your account.</Alert>}
       {state === "error" && <Alert variant="error">{message} Sign in to request a new verification email.</Alert>}
       <Button asChild className="w-full">
-        <Link href="/login">Go to sign in</Link>
+        <Link href="/login?next=/onboarding">Go to sign in</Link>
       </Button>
     </div>
   );

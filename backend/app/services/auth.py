@@ -107,7 +107,7 @@ async def _redeem_email_token(db: AsyncSession, raw: str, purpose: str) -> tuple
 # --- Registration & verification --------------------------------------------
 async def register(
     db: AsyncSession, *, organization_name: str | None, full_name: str, email: str, password: str,
-    client: ClientInfo, account_type: str = "org_buyer",
+    client: ClientInfo, account_type: str = "solo_buyer",
 ) -> tuple[User, str | None]:
     await set_system(db)
     email = normalize_email(email)

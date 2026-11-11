@@ -13,10 +13,14 @@ export interface OnboardingField {
 
 export interface OnboardingState {
   account_type: AccountType;
+  organization_name: string;
   completed: boolean;
   can_edit: boolean;
-  fields: OnboardingField[];
+  roles: { value: AccountType; label: string; description: string }[];
+  forms: Record<AccountType, OnboardingField[]>;
   profile: Record<string, string | string[]>;
+  credit_balance: number;
+  trial_ends_at: string | null;
 }
 
 export interface Me {
@@ -25,6 +29,8 @@ export interface Me {
   organization_name: string;
   account_type: AccountType;
   onboarding_completed: boolean;
+  credit_balance: number;
+  trial_ends_at: string | null;
   email: string;
   full_name: string;
   role: Role;

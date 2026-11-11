@@ -1,7 +1,7 @@
-"""Account types and the intake (profile qualification) form each one answers after verifying its email.
+"""Account types and the qualification wizard every new account completes after signing up.
 
-The form is defined here, on the server, and sent to the web app as data: the questions, the allowed answers
-and the validation live in one place, and the client cannot store anything this module does not describe.
+The wizard is defined here, on the server, and sent to the web app as data: the roles, the questions, the
+allowed answers and the validation live in one place, and nothing this module does not describe can be stored.
 """
 from enum import StrEnum
 from typing import Any
@@ -15,97 +15,79 @@ class AccountType(StrEnum):
     SUPPLIER = "supplier"  # a wholesaler or liquidator listing inventory
 
 
+ROLES: list[dict[str, str]] = [
+    {"value": AccountType.SOLO_BUYER.value, "label": "Solo Buyer / Reseller",
+     "description": "Sourcing pallets/truckloads for resale."},
+    {"value": AccountType.ORG_BUYER.value, "label": "Purchasing Team / Enterprise",
+     "description": "Corporate procurement or multi-member team."},
+    {"value": AccountType.SUPPLIER.value, "label": "Inventory Supplier / Liquidator",
+     "description": "Selling wholesale lots, returns, or overstock."},
+]
+
+
 def _options(*pairs: tuple[str, str]) -> list[dict[str, str]]:
     return [{"value": value, "label": label} for value, label in pairs]
-
-
-PRODUCT_CATEGORIES = _options(
-    ("apparel", "Apparel & footwear"),
-    ("electronics", "Electronics"),
-    ("tools", "Tools & hardware"),
-    ("home_goods", "Home goods"),
-    ("appliances", "Appliances"),
-    ("furniture", "Furniture"),
-    ("beauty", "Health & beauty"),
-    ("toys", "Toys & baby"),
-    ("sporting_goods", "Sporting goods"),
-    ("automotive", "Automotive"),
-    ("grocery", "Grocery & consumables"),
-    ("general_merchandise", "General merchandise"),
-    ("other", "Other"),
-)
-
-_BUDGET = _options(
-    ("under_1k", "Under $1,000"),
-    ("1k_5k", "$1,000 - $5,000"),
-    ("5k_25k", "$5,000 - $25,000"),
-    ("25k_100k", "$25,000 - $100,000"),
-    ("over_100k", "Over $100,000"),
-)
 
 
 def _field(key: str, label: str, kind: str, options: list[dict[str, str]], help_text: str = "") -> dict[str, Any]:
     return {"key": key, "label": label, "kind": kind, "options": options, "help": help_text}
 
 
+_BUYER_FORM = [
+    _field("product_categories", "What do you buy?", "multiselect", _options(
+        ("luxury_apparel", "Luxury Apparel"),
+        ("footwear", "Footwear"),
+        ("consumer_electronics", "Consumer Electronics"),
+        ("power_tools", "Power Tools"),
+        ("small_appliances", "Small Appliances"),
+        ("beauty_personal_care", "Beauty & Personal Care"),
+        ("general_merchandise", "General Merchandise"),
+    ), "Choose every category you source."),
+    _field("monthly_budget", "Monthly purchasing budget", "select", _options(
+        ("under_5k", "< $5,000"),
+        ("5k_25k", "$5,000 - $25,000"),
+        ("25k_100k", "$25,000 - $100,000"),
+        ("over_100k", "$100,000+"),
+    )),
+    _field("lot_sizes", "Preferred lot sizes", "multiselect", _options(
+        ("box_lots", "Box lots"),
+        ("pallets", "Pallets"),
+        ("truckloads", "Full Truckloads (FTL)"),
+    ), "Choose every size you buy."),
+]
+
 FORMS: dict[AccountType, list[dict[str, Any]]] = {
-    AccountType.SOLO_BUYER: [
-        _field("business_type", "How do you sell?", "select", _options(
-            ("online_marketplace", "Online marketplaces (eBay, Amazon, Poshmark...)"),
-            ("own_store", "My own online store"),
-            ("retail_store", "Physical store or bin store"),
-            ("flea_market", "Flea markets and local sales"),
-            ("wholesale", "I resell to other businesses"),
-            ("getting_started", "Just getting started"),
-            ("other", "Other"),
-        )),
-        _field("monthly_sourcing_budget", "Monthly sourcing budget", "select", _BUDGET),
-        _field("product_categories", "Product categories you buy", "multiselect", PRODUCT_CATEGORIES,
-               "Choose every category that applies."),
-    ],
-    AccountType.ORG_BUYER: [
-        _field("business_type", "Type of business", "select", _options(
-            ("retailer", "Retailer"),
-            ("wholesaler", "Wholesaler"),
-            ("distributor", "Distributor"),
-            ("exporter", "Exporter"),
-            ("manufacturer", "Manufacturer"),
-            ("other", "Other"),
-        )),
-        _field("team_size", "People who will source with this account", "select", _options(
-            ("2_5", "2 - 5"),
-            ("6_20", "6 - 20"),
-            ("21_100", "21 - 100"),
-            ("over_100", "More than 100"),
-        )),
-        _field("monthly_sourcing_budget", "Monthly sourcing budget", "select", _BUDGET),
-        _field("product_categories", "Product categories you buy", "multiselect", PRODUCT_CATEGORIES,
-               "Choose every category that applies."),
-    ],
+    AccountType.SOLO_BUYER: _BUYER_FORM,
+    AccountType.ORG_BUYER: _BUYER_FORM,
     AccountType.SUPPLIER: [
-        _field("business_type", "Type of business", "select", _options(
-            ("liquidator", "Liquidator"),
-            ("wholesaler", "Wholesaler"),
-            ("retailer_overstock", "Retailer selling overstock or returns"),
-            ("manufacturer", "Manufacturer"),
-            ("distributor", "Distributor"),
-            ("returns_processor", "Returns processor / 3PL"),
-            ("other", "Other"),
+        _field("inventory_types", "Primary inventory types", "multiselect", _options(
+            ("customer_returns", "Customer Returns"),
+            ("shelf_pulls", "Shelf Pulls"),
+            ("overstock", "Overstock"),
+            ("salvage", "Salvage"),
+        ), "Choose every type you sell."),
+        _field("manifest_format", "Typical manifest format", "select", _options(
+            ("csv", "CSV"),
+            ("excel", "Excel"),
+            ("scanned_pdf", "Scanned PDF"),
+            ("api_feed", "Real-Time API feed"),
         )),
-        _field("monthly_inventory_volume", "Inventory you move each month", "select", _options(
-            ("under_5_pallets", "Fewer than 5 pallets"),
-            ("5_25_pallets", "5 - 25 pallets"),
-            ("1_5_truckloads", "1 - 5 truckloads"),
-            ("over_5_truckloads", "More than 5 truckloads"),
-        )),
-        _field("product_categories", "Product categories you sell", "multiselect", PRODUCT_CATEGORIES,
-               "Choose every category that applies."),
+        _field("dispatch_regions", "Warehouse dispatch regions", "multiselect", _options(
+            ("northeast", "Northeast"),
+            ("midwest", "Midwest"),
+            ("south", "South"),
+            ("west_coast", "West Coast"),
+        ), "Choose every region you ship from."),
     ],
 }
 
 
 def form_for(account_type: str) -> list[dict[str, Any]]:
     return FORMS[AccountType(account_type)]
+
+
+def all_forms() -> dict[str, list[dict[str, Any]]]:
+    return {account_type.value: fields for account_type, fields in FORMS.items()}
 
 
 def _invalid(field: str, message: str) -> ApiError:

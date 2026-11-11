@@ -33,18 +33,16 @@ def token_from_email(to: str) -> str:
     raise AssertionError(f"no email sent to {to}")
 
 
+_BUYER_ANSWERS = {
+    "product_categories": ["power_tools", "consumer_electronics"], "monthly_budget": "5k_25k",
+    "lot_sizes": ["pallets", "truckloads"],
+}
 ONBOARDING_ANSWERS = {
-    "solo_buyer": {
-        "business_type": "online_marketplace", "monthly_sourcing_budget": "1k_5k",
-        "product_categories": ["apparel", "electronics"],
-    },
-    "org_buyer": {
-        "business_type": "retailer", "team_size": "6_20", "monthly_sourcing_budget": "25k_100k",
-        "product_categories": ["tools", "electronics"],
-    },
+    "solo_buyer": _BUYER_ANSWERS,
+    "org_buyer": _BUYER_ANSWERS,
     "supplier": {
-        "business_type": "liquidator", "monthly_inventory_volume": "1_5_truckloads",
-        "product_categories": ["apparel", "tools"],
+        "inventory_types": ["customer_returns", "overstock"], "manifest_format": "excel",
+        "dispatch_regions": ["midwest", "south"],
     },
 }
 
