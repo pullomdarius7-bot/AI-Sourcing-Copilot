@@ -90,3 +90,13 @@ def invitation_email(org_name: str, role: str, token: str) -> tuple[str, str]:
         f"You were invited to join {org_name} as {role}.\n\nAccept the invitation:\n{url}\n\n"
         f"The invitation expires in {settings.invite_token_days} days.\n",
     )
+
+
+def payment_failed_email(org_name: str) -> tuple[str, str]:
+    url = f"{settings.app_base_url}/billing"
+    return (
+        "Your payment failed",
+        f"We could not take the latest subscription payment for {org_name}.\n\n"
+        "AI analysis is paused until a payment succeeds. Update your payment method here:\n"
+        f"{url}\n",
+    )

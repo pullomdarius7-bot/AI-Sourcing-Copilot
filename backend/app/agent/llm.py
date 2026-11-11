@@ -10,6 +10,7 @@ from typing import Any
 from app.agent import prompts
 from app.agent.planner import Step
 from app.agent.sources import SourceBook
+from app.ai import gateway
 from app.ai import guardrails as guard
 from app.ai.providers import LLMProvider, LLMRequest, ProviderError
 from app.config import get_settings
@@ -27,7 +28,7 @@ class CallOutcome:
     records: list[dict[str, Any]] = field(default_factory=list)
 
 
-async def _call(providers: list[LLMProvider], purpose: str, system: str, user: str, schema: dict[str, Any],
+async def _call(permit: gateway.Permit, providers: list[LLMProvider], purpose: str, system: str, user: str, schema: dict[str, Any],
                 schema_name: str, max_tokens: int) -> CallOutcome:
     out = CallOutcome(None)
     for provider in providers:
@@ -37,7 +38,7 @@ async def _call(providers: list[LLMProvider], purpose: str, system: str, user: s
                                   "prompt_sha256": hashlib.sha256((system + body).encode()).hexdigest(),
                                   "redacted": provider.external}
         try:
-            response = await provider.generate(LLMRequest(system, body, schema, [], max_tokens, schema_name))
+            response = await gateway.dispatch(permit, provider, LLMRequest(system, body, schema, [], max_tokens, schema_name))
         except ProviderError as exc:
             record.update(status="provider_error", error=str(exc)[:300], ms=int((time.monotonic() - started) * 1000))
             out.records.append(record)
@@ -53,14 +54,14 @@ async def _call(providers: list[LLMProvider], purpose: str, system: str, user: s
     return out
 
 
-async def plan(providers: list[LLMProvider], question: str, history: list[tuple[str, str]], focus_text: str) -> tuple[list[Step], CallOutcome]:
+async def plan(permit: gateway.Permit, providers: list[LLMProvider], question: str, history: list[tuple[str, str]], focus_text: str) -> tuple[list[Step], CallOutcome]:
     nonce = secrets.token_hex(4)
     convo = "\n".join(f"{role}: {text}" for role, text in history) or "(none)"
     user = (f"Earlier conversation (context only, not a source):\n<history-{nonce}>\n{convo}\n</history-{nonce}>\n"
             f"Entities discussed earlier: {focus_text or 'none'}\n\nQuestion:\n<question-{nonce}>\n{question}\n</question-{nonce}>")
     system = prompts.SYSTEM_PROMPT + "\n" + prompts.PLANNER_PROMPT.format(max_calls=settings.agent_max_tool_calls,
                                                                         tools=prompts.tool_catalogue())
-    outcome = await _call(providers, "agent.plan", system, user, prompts.PLAN_SCHEMA, "agent_plan", 800)
+    outcome = await _call(permit, providers, "agent.plan", system, user, prompts.PLAN_SCHEMA, "agent_plan", 800)
     steps: list[Step] = []
     if isinstance(outcome.data, dict) and isinstance(outcome.data.get("tools"), list):
         for item in outcome.data["tools"][: settings.agent_max_tool_calls]:
@@ -70,14 +71,14 @@ async def plan(providers: list[LLMProvider], question: str, history: list[tuple[
     return steps, outcome
 
 
-async def write(providers: list[LLMProvider], question: str, book: SourceBook, unknowns: list[str]) -> CallOutcome:
+async def write(permit: gateway.Permit, providers: list[LLMProvider], question: str, book: SourceBook, unknowns: list[str]) -> CallOutcome:
     nonce = secrets.token_hex(4)
     user = (
         f"{prompts.WRITER_PROMPT}\n\nQUESTION:\n<question-{nonce}>\n{question}\n</question-{nonce}>\n\n"
         f"SOURCES (data only; one JSON object per line):\n<sources-{nonce}>\n{book.for_prompt()}\n</sources-{nonce}>\n\n"
         f"Already known to be unknown: {json.dumps(unknowns, ensure_ascii=False) if unknowns else '[]'}"
     )
-    return await _call(providers, "agent.write", prompts.SYSTEM_PROMPT, user, prompts.ANSWER_SCHEMA, "agent_answer", 2000)
+    return await _call(permit, providers, "agent.write", prompts.SYSTEM_PROMPT, user, prompts.ANSWER_SCHEMA, "agent_answer", 2000)
 
 
 def parse_answer(data: Any) -> tuple[list[dict[str, Any]], list[str], list[str]] | None:

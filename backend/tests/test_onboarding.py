@@ -166,7 +166,7 @@ async def test_onboarding_starts_the_trial_with_ten_analyses_for_seven_days(clie
     ends = datetime.fromisoformat(me["trial_ends_at"])
     assert timedelta(days=6, hours=23) < ends - datetime.now(UTC) <= timedelta(days=7)
     async with admin_engine.connect() as conn:
-        rows = (await conn.execute(text("SELECT kind, delta, balance_after, reference FROM credit_ledgers"))).all()
+        rows = (await conn.execute(text("SELECT kind, delta, balance_after, reference FROM credit_transactions"))).all()
     assert [tuple(r) for r in rows] == [("trial_grant", 10, 10, "trial")]
 
 
@@ -178,7 +178,7 @@ async def test_resubmitting_the_profile_never_grants_a_second_trial(client, admi
     me = (await client.get("/auth/me", headers=account.headers)).json()
     assert (me["credit_balance"], me["trial_ends_at"]) == (10, first["trial_ends_at"])
     async with admin_engine.connect() as conn:
-        assert await conn.scalar(text("SELECT count(*) FROM credit_ledgers")) == 1
+        assert await conn.scalar(text("SELECT count(*) FROM credit_transactions")) == 1
 
 
 async def test_simultaneous_submissions_grant_one_trial(client, admin_engine):
@@ -187,7 +187,7 @@ async def test_simultaneous_submissions_grant_one_trial(client, admin_engine):
     account = await register_admin(client, onboard=False)
     await asyncio.gather(*(complete_onboarding(client, account) for _ in range(5)))
     async with admin_engine.connect() as conn:
-        assert await conn.scalar(text("SELECT count(*) FROM credit_ledgers")) == 1
+        assert await conn.scalar(text("SELECT count(*) FROM credit_transactions")) == 1
         assert await conn.scalar(text("SELECT credit_balance FROM organizations")) == 10
 
 
@@ -242,14 +242,14 @@ async def test_ledger_is_tenant_isolated_and_append_only(client):
     b = await register_admin(client, email="b@globex.test", org="Globex")
     async with SessionLocal() as db:
         await set_tenant(db, a.org_id)
-        orgs = (await db.execute(text("SELECT DISTINCT organization_id::text FROM credit_ledgers"))).scalars().all()
+        orgs = (await db.execute(text("SELECT DISTINCT organization_id::text FROM credit_transactions"))).scalars().all()
         assert orgs == [a.org_id]
         with pytest.raises(ProgrammingError):  # WITH CHECK: cannot write into another tenant
             await db.execute(text(
-                "INSERT INTO credit_ledgers (organization_id, kind, delta, balance_after) "
+                "INSERT INTO credit_transactions (organization_id, kind, delta, balance_after) "
                 f"VALUES ('{b.org_id}', 'adjustment', 1000, 1000)"
             ))
-    for statement in ("UPDATE credit_ledgers SET delta = 1000", "DELETE FROM credit_ledgers"):
+    for statement in ("UPDATE credit_transactions SET delta = 1000", "DELETE FROM credit_transactions"):
         async with SessionLocal() as db:
             await set_tenant(db, a.org_id)
             with pytest.raises(ProgrammingError):

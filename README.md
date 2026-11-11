@@ -318,12 +318,72 @@ The roles, questions and allowed answers are defined in `backend/app/onboarding.
 (JSONB) are columns of `organizations` (migration `0008`). Organizations that existed before became `org_buyer`
 with onboarding completed and no trial.
 
-**Credits and trial.** One credit is one manifest analysis. `credit_ledgers` (migration `0009`) is the
-append-only record of every grant and charge; `organizations.credit_balance` is the running balance. Both are
-changed only by `backend/app/billing/ledger.py`, in one transaction, with the organization row locked: the
-balance cannot go below zero, concurrent charges cannot overspend, and a charge or grant carrying a `reference`
-is applied once. Finishing onboarding grants `TRIAL_CREDITS` (10) and sets `trial_ends_at` to `TRIAL_DAYS` (7)
-from now, once per account. Nothing spends credits yet: charging the AI calls is Phase 3.
+**Credits and trial.** One credit is the unit everything is priced in. `credit_transactions` is the record of
+every grant and charge; `organizations.credit_balance` is the running balance. Both are changed only by
+`backend/app/billing/ledger.py`, in one transaction, with the organization row locked (`SELECT ... FOR UPDATE`):
+the balance cannot go below zero and concurrent charges cannot overspend. Finishing onboarding grants
+`TRIAL_CREDITS` (10) and sets `trial_ends_at` to `TRIAL_DAYS` (7) from now, once per account.
 
 **Isolation.** Every tenant table carries `organization_id` under forced row-level security, and a test fails if
-a table with that column is added without it. `alembic downgrade 0007` removes everything in this section.
+a table with that column is added without it. `alembic downgrade 0007` removes everything in this section and the next.
+
+## Phase 3: Stripe billing, credit metering and the AI gateway
+
+**The gateway.** `backend/app/ai/gateway.py` is the only code that calls a model provider (a test fails if any
+other file does). Every AI action goes through four steps:
+
+1. `acquire`: lock the account, check it has an active subscription or an unexpired trial, check the balance
+   covers the cost, deduct the credits and commit. If a check fails nothing is charged, no provider is
+   contacted, and the caller gets HTTP 402:
+   `{"error": {"code": "INSUFFICIENT_CREDITS" | "SUBSCRIPTION_REQUIRED", "remaining": 0, "upgrade_url": "/billing", ...}}`
+2. `dispatch`: the model call (one charge can cover several calls, e.g. the chunks of a long document).
+3. `settle`: on success, in the transaction that stores the result.
+4. `release`: on failure the credits are refunded. If a worker dies mid-call the charge stays `held` and the
+   retry of the same document or run reuses it instead of charging again.
+
+| Action | Cost | Where |
+|---|---|---|
+| `manifest_extraction` | 1 credit under 500 line items, otherwise 1 per 100 line items | Analysis of every uploaded document |
+| `deep_analysis` | 1 credit per run (`CREDIT_COST_DEEP_ANALYSIS`) | Requirement extraction; answers 402 before a job is queued |
+| `assistant_answer` | 1 credit (`CREDIT_COST_ASSISTANT_ANSWER`) | Model-written assistant answers; without credits the assistant answers from fixed rules and no model is used |
+
+An upload is always accepted, scanned and made searchable; without credits only its AI analysis is skipped,
+with the reason shown on the document. `BILLING_ENFORCED=false` switches all checks off.
+
+**Plans.** `solo_buyer_monthly` ($79, 25 credits), `enterprise_buyer_monthly` ($249, 250 credits, turns a solo
+account into a team) and `supplier_monthly` ($149, 100 credits). Buyers can choose either buyer plan; suppliers
+the supplier plan. Each paid invoice resets the balance to the plan's quota: unused credits do not roll over.
+
+**Stripe setup.**
+
+1. In Stripe create one recurring monthly price per plan and set its lookup key to the plan key (or put the
+   price ids in `STRIPE_PRICE_*`).
+2. Add a webhook endpoint `https://<domain>/api/webhooks/stripe` for `checkout.session.completed`,
+   `invoice.payment_succeeded`, `invoice.payment_failed`, `customer.subscription.updated` and
+   `customer.subscription.deleted`.
+3. Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in `.env`, and enable the customer portal in Stripe.
+
+**Endpoints.** `GET /api/billing` (plan, status, balance, plans, recent transactions),
+`POST /api/billing/create-checkout-session` and `POST /api/billing/create-portal-session` (administrators
+only), `POST /api/webhooks/stripe` (authenticated by Stripe's signature over the raw body; events older than
+five minutes or already processed are not applied again).
+
+| Event | Effect |
+|---|---|
+| `checkout.session.completed` | Links customer and subscription, sets the plan; if paid: `active` and the monthly quota. With a trial: `trialing`, trial credits kept |
+| `invoice.payment_succeeded` | `active`, quota refilled, period end stored. A zero-amount trial invoice grants nothing |
+| `invoice.payment_failed` | `past_due`: AI is paused and the account's administrators are emailed |
+| `customer.subscription.updated` | Plan and status changes made in the portal |
+| `customer.subscription.deleted` | `cancelled`, plan removed, remaining credits wiped |
+
+Checkout carries over only what is left of the account's free trial (a card is collected, the first charge
+happens when the trial ends). An account whose trial credits or days are used up is charged immediately and
+gets its quota immediately.
+
+**In the app.** The header shows the credits left, the trial countdown and an "Add Credits / Upgrade" button; a
+banner appears on every page at 2 credits or fewer, after the trial, after a failed payment and after
+cancellation. `/billing` shows the plan, the plans available, the portal and the credit activity.
+
+Migration `0010` renames `credit_ledgers` to `credit_transactions`, adds the action, the subject and the
+held/settled/refunded state, adds the subscription columns and `stripe_events`, and starts a standard trial for
+accounts that existed before trials did.

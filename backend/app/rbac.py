@@ -16,6 +16,7 @@ class Permission(StrEnum):
     USERS_MANAGE = "users:manage"
     INVITATIONS_MANAGE = "invitations:manage"
     AUDIT_READ = "audit:read"
+    BILLING_MANAGE = "billing:manage"  # choose a plan, open the billing portal
     DOCUMENTS_READ = "documents:read"
     DOCUMENTS_UPLOAD = "documents:upload"
     DOCUMENTS_DELETE = "documents:delete"

@@ -61,9 +61,15 @@ class Organization(Base):
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Intake answers, validated against the account type's form before they are stored.
     onboarding_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    # Analysis credits left. Changed only by app.billing.ledger, together with a credit_ledgers row.
+    # Analysis credits left. Changed only by app.billing.ledger, together with a credit_transactions row.
     credit_balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(64))
+    plan: Mapped[str | None] = mapped_column(String(40))  # key of app.billing.plans.PLANS
+    # none | trialing | active | past_due | cancelled
+    subscription_status: Mapped[str] = mapped_column(String(12), nullable=False, default="none")
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -168,10 +174,10 @@ class AuditLog(TenantMixin, Base):
     created_at: Mapped[datetime] = _created()
 
 
-class CreditLedger(TenantMixin, Base):
+class CreditTransaction(TenantMixin, Base):
     """Append-only record of every credit granted or spent (one credit = one manifest analysis)."""
 
-    __tablename__ = "credit_ledgers"
+    __tablename__ = "credit_transactions"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
@@ -181,6 +187,11 @@ class CreditLedger(TenantMixin, Base):
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reference: Mapped[str | None] = mapped_column(String(120))
     note: Mapped[str | None] = mapped_column(String(300))
+    # What was charged for: the metered action and the document, run or answer it paid for.
+    action: Mapped[str | None] = mapped_column(String(40))
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # held (charged, work in flight) | settled | refunded. The only column the application may update.
+    state: Mapped[str] = mapped_column(String(10), nullable=False, default="settled")
     created_at: Mapped[datetime] = _created()
 
 

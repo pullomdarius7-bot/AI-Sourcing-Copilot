@@ -13,7 +13,20 @@ from app import metrics
 from app.config import get_settings
 from app.db import SessionLocal, engine, set_system
 from app.errors import ApiError
-from app.routers import agent, analysis, auth, documents, health, jobs, onboarding, requirements, rfqs, suppliers, team
+from app.routers import (
+    agent,
+    analysis,
+    auth,
+    billing,
+    documents,
+    health,
+    jobs,
+    onboarding,
+    requirements,
+    rfqs,
+    suppliers,
+    team,
+)
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -103,7 +116,7 @@ def _error(status: int, code: str, message: str, headers=None, **extra) -> JSONR
 
 @app.exception_handler(ApiError)
 async def api_error_handler(_: Request, exc: ApiError):
-    return _error(exc.status_code, exc.code, exc.message, exc.headers)
+    return _error(exc.status_code, exc.code, exc.message, exc.headers, **exc.extra)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -131,6 +144,8 @@ async def unhandled_error_handler(_: Request, exc: Exception):
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(onboarding.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
+app.include_router(billing.webhooks, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")

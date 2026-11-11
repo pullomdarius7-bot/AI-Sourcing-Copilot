@@ -38,6 +38,21 @@ class Settings(BaseSettings):
     trial_days: int = 7
     trial_credits: int = 10
 
+    # --- Billing ---
+    # false = credits and subscriptions are not checked (self-hosted installs that do not sell access)
+    billing_enforced: bool = True
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    # Optional price ids. Left empty, each price is found by its lookup key, which equals the plan key.
+    stripe_price_solo_buyer_monthly: str = ""
+    stripe_price_enterprise_buyer_monthly: str = ""
+    stripe_price_supplier_monthly: str = ""
+    plan_credits_solo: int = 25
+    plan_credits_enterprise: int = 250
+    plan_credits_supplier: int = 100
+    credit_cost_deep_analysis: int = 1
+    credit_cost_assistant_answer: int = 1
+
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 30
     cors_origins: str = ""

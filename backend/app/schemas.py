@@ -114,6 +114,9 @@ class MeOut(UserOut):
     onboarding_completed: bool
     credit_balance: int
     trial_ends_at: datetime | None
+    plan: str | None
+    subscription_status: str
+    ai_access: bool
     permissions: list[str]
 
 

@@ -3,6 +3,33 @@ export const ROLES: Role[] = ["requester", "buyer", "approver", "admin", "audito
 
 export type AccountType = "solo_buyer" | "org_buyer" | "supplier";
 
+export type SubscriptionStatus = "none" | "trialing" | "active" | "past_due" | "cancelled";
+
+export interface Billing {
+  plan: string | null;
+  subscription_status: SubscriptionStatus;
+  credit_balance: number;
+  trial_ends_at: string | null;
+  current_period_end: string | null;
+  ai_access: boolean;
+  ai_access_reason: string | null;
+  can_manage: boolean;
+  has_billing_profile: boolean;
+  checkout_trial_days: number | null;
+  plans: { key: string; name: string; price_cents: number; monthly_credits: number; seats: number | null }[];
+  transactions: {
+    id: number;
+    kind: string;
+    action: string | null;
+    subject_id: string | null;
+    delta: number;
+    balance_after: number;
+    state: "held" | "settled" | "refunded";
+    note: string | null;
+    created_at: string;
+  }[];
+}
+
 export interface OnboardingField {
   key: string;
   label: string;
@@ -31,6 +58,9 @@ export interface Me {
   onboarding_completed: boolean;
   credit_balance: number;
   trial_ends_at: string | null;
+  plan: string | null;
+  subscription_status: SubscriptionStatus;
+  ai_access: boolean;
   email: string;
   full_name: string;
   role: Role;

@@ -26,6 +26,9 @@ curl -fsS -b "$JAR" -X PUT "$BASE/api/onboarding" -H 'content-type: application/
   -d '{"account_type":"org_buyer","organization_name":"Smoke Co","answers":{"product_categories":["power_tools","footwear"],"monthly_budget":"5k_25k","lot_sizes":["pallets"]}}' \
   | grep -q '"completed":true'
 curl -fsS -b "$JAR" "$BASE/api/auth/me" | grep -q '"credit_balance":10' || { echo "trial credits were not granted"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/billing" | grep -q '"subscription_status":"none"' || { echo "billing summary is not available"; exit 1; }
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/webhooks/stripe" -H 'content-type: application/json' -d '{}')
+case "$CODE" in 400|503) ;; *) echo "an unsigned Stripe webhook must be refused, got $CODE"; exit 1 ;; esac
 echo "-> public landing page"
 curl -fsS "$BASE/" | grep -q 'Stop guessing on blind pallets' || { echo "landing page is not served at /"; exit 1; }
 echo "-> upload documents (clean file + EICAR test file)"

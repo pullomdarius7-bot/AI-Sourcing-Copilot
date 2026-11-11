@@ -41,6 +41,9 @@ async function forward(req: NextRequest, path: string, body: ArrayBuffer | undef
   };
   if (body !== undefined) headers["content-type"] = req.headers.get("content-type") ?? "application/json";
   if (access) headers.authorization = `Bearer ${access}`;
+  // Stripe signs the raw webhook body; the backend needs the signature to verify it.
+  const stripeSignature = req.headers.get("stripe-signature");
+  if (stripeSignature) headers["stripe-signature"] = stripeSignature;
   return fetch(`${API}/api/v1/${path}${req.nextUrl.search}`, {
     method: req.method,
     headers,

@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, ClipboardCheck, CreditCard, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { CreditBanner, CreditWidget } from "@/components/credit-widget";
 import { MeProvider } from "@/components/me-context";
 
 const NAV = [
@@ -22,20 +23,11 @@ const NAV = [
   { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read" },
   { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
+  { href: "/billing", label: "Billing", icon: CreditCard, permission: null },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },
   { href: "/security", label: "Security", icon: ShieldCheck, permission: null },
 ];
-
-function TrialBadge({ balance, endsAt }: { balance: number; endsAt: string }) {
-  const days = Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000);
-  if (days <= 0 || balance <= 0) return <Badge variant="caution" className="mr-auto">Free trial ended</Badge>;
-  return (
-    <Badge variant="default" className="mr-auto">
-      Free trial: {balance} {balance === 1 ? "analysis" : "analyses"} left · {days} {days === 1 ? "day" : "days"}
-    </Badge>
-  );
-}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: me, error, loading } = useFetch<Me>("auth/me");
@@ -92,8 +84,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </aside>
         <div className="min-w-0">
-          <header className="flex items-center justify-end gap-3 border-b bg-card px-6 py-3">
-            {me.trial_ends_at && <TrialBadge balance={me.credit_balance} endsAt={me.trial_ends_at} />}
+          <header className="flex flex-wrap items-center justify-end gap-3 border-b bg-card px-6 py-3">
+            <CreditWidget me={me} />
             <div className="text-right">
               <p className="text-sm font-medium leading-tight">{me.full_name}</p>
               <p className="text-xs text-muted-foreground">{me.email}</p>
@@ -103,6 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               Sign out
             </Button>
           </header>
+          <CreditBanner me={me} />
           <main className="mx-auto max-w-5xl p-6">{children}</main>
         </div>
       </div>

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import email as mail
+from app.billing.access import access_problem
 from app.config import get_settings
 from app.db import get_db
 from app.deps import Principal, client_ip, get_principal
@@ -170,6 +171,9 @@ async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(g
         onboarding_completed=p.org.onboarding_completed,
         credit_balance=p.org.credit_balance,
         trial_ends_at=p.org.trial_ends_at,
+        plan=p.org.plan,
+        subscription_status=p.org.subscription_status,
+        ai_access=access_problem(p.org) is None,
         permissions=permissions_for(p.user.role),
     )
 
