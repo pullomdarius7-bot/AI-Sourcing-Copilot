@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+node_modules/
+.next/
+*.tsbuildinfo
+.deploy/
+backups/
+loadtest/results/
+.env.before-restore.*

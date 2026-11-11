@@ -1,0 +1,124 @@
+# Rendered to /etc/nginx/conf.d/copilot.conf by the nginx image (envsubst) from:
+#   DOMAIN, NGINX_CLIENT_MAX_BODY, NGINX_REGISTER_DEFAULT
+
+upstream copilot_frontend {
+    server frontend:3000;
+    keepalive 32;
+}
+
+# 1 = anyone may register a new organization, 0 = only the addresses in register-allow.conf.
+geo $register_allowed {
+    default ${NGINX_REGISTER_DEFAULT};
+    include /etc/nginx/register-allow.conf;
+}
+
+# Container health check only (not published).
+server {
+    listen 127.0.0.1:8080;
+    access_log off;
+    location = /nginx-health {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+}
+
+# HTTP: ACME challenges and a redirect to HTTPS.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://${DOMAIN}$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Security headers. The upstream's own copies are hidden so each header is sent exactly once.
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header X-Powered-By;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+    add_header X-Request-Id $request_id always;
+
+    # Uploads: keep this a little above MAX_UPLOAD_MB in .env.
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY};
+    client_body_timeout 120s;
+    limit_conn perip 40;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    # Overwritten, never appended: the application rate-limits and audits by this address.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-Id $request_id;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+
+    location = /healthz {
+        access_log off;
+        proxy_pass http://copilot_frontend/api/healthz;
+    }
+
+    location = /api/auth/register {
+        if ($register_allowed = 0) {
+            return 403;
+        }
+        limit_req zone=auth burst=10 nodelay;
+        proxy_pass http://copilot_frontend;
+    }
+
+    location ^~ /api/auth/ {
+        limit_req zone=auth burst=20 nodelay;
+        proxy_pass http://copilot_frontend;
+    }
+
+    # Assistant answers can take longer when a model is configured.
+    location ^~ /api/agent/ {
+        limit_req zone=api burst=30 nodelay;
+        proxy_read_timeout 180s;
+        proxy_pass http://copilot_frontend;
+    }
+
+    location ^~ /api/ {
+        limit_req zone=api burst=60 nodelay;
+        proxy_pass http://copilot_frontend;
+    }
+
+    location ~ /\.(?!well-known) {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://copilot_frontend;
+    }
+}

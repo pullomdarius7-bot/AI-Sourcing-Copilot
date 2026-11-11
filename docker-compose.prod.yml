@@ -1,0 +1,74 @@
+# Production overlay: nginx reverse proxy with Let's Encrypt certificates, and memory ceilings.
+# Enabled by COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml in .env (scripts/configure-prod.sh sets it),
+# after which plain `docker compose ...` commands use both files.
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env (scripts/configure-prod.sh)}
+      NGINX_CLIENT_MAX_BODY: ${NGINX_CLIENT_MAX_BODY:-25m}
+      NGINX_REGISTER_DEFAULT: ${NGINX_REGISTER_DEFAULT:-1}
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/templates:/etc/nginx/templates:ro
+      - ./infra/nginx/register-allow.conf:/etc/nginx/register-allow.conf:ro
+      - ./infra/nginx/99-reload-certs.sh:/docker-entrypoint.d/99-reload-certs.sh:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  # Renews certificates twice a day (a no-op until 30 days before expiry). First issue: scripts/ssl-init.sh
+  certbot:
+    image: certbot/certbot:v3.0.1
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+
+  backend:
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEMORY_LIMIT:-1536m}
+
+  worker:
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-1536m}
+
+  frontend:
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEMORY_LIMIT:-768m}
+
+  clamav:
+    deploy:
+      resources:
+        limits:
+          memory: ${CLAMAV_MEMORY_LIMIT:-3g}
+
+  minio:
+    deploy:
+      resources:
+        limits:
+          memory: ${MINIO_MEMORY_LIMIT:-1g}
+
+volumes:
+  letsencrypt:
+  certbot_www:

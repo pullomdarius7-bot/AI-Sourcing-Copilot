@@ -1,0 +1,52 @@
+// Ships the stdout/stderr of every container of this compose project to Loki.
+// Labels: service (compose service name), container, level (when the line carries one).
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=ai-sourcing-copilot"]
+  }
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  labels        = {job = "copilot"}
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.level.receiver]
+}
+
+loki.process "level" {
+  stage.regex {
+    expression = "(?:^|\\s|\\[)(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\\s|\\]|:)"
+  }
+
+  stage.labels {
+    values = {level = ""}
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

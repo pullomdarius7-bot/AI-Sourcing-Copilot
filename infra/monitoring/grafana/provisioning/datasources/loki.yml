@@ -1,0 +1,9 @@
+# Available when the logging profile is running (docker compose --profile logging up -d).
+apiVersion: 1
+datasources:
+  - name: Loki
+    uid: copilot-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false

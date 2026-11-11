@@ -1,0 +1,301 @@
+name: ai-sourcing-copilot
+
+x-backend-env: &backend-env
+  ENVIRONMENT: production
+  DATABASE_URL: postgresql+asyncpg://copilot_app:${APP_DB_PASSWORD:?run ./scripts/init-env.sh first}@db:5432/${POSTGRES_DB:-copilot}
+  JWT_SECRET: ${JWT_SECRET:?run ./scripts/init-env.sh first}
+  MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?run ./scripts/init-env.sh first}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-false}
+  EMAIL_FROM: ${EMAIL_FROM:-AI Sourcing Copilot <no-reply@sourcing.local>}
+  REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-true}
+  ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+  REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+  # Documents & storage (MinIO first, automatic fallback to the shared local volume)
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-auto}
+  STORAGE_LOCAL_DIR: /data/uploads
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-copilot-minio}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?run ./scripts/init-env.sh first}
+  MINIO_BUCKET: ${MINIO_BUCKET:-documents}
+  # Virus scanning (built-in checks + ClamAV)
+  SCAN_BACKEND: ${SCAN_BACKEND:-both}
+  CLAMAV_HOST: clamav
+  # Job workers
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+  JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  # Requirement extraction & review
+  REQUIRE_SEPARATE_APPROVER: ${REQUIRE_SEPARATE_APPROVER:-true}
+  BULK_VERIFY_MIN_CONFIDENCE: ${BULK_VERIFY_MIN_CONFIDENCE:-0.85}
+  EXTRACTION_CHUNK_CHARS: ${EXTRACTION_CHUNK_CHARS:-40000}
+  # Suppliers, RFQs & comparisons
+  RFQ_NUMBER_PREFIX: ${RFQ_NUMBER_PREFIX:-RFQ}
+  SUPPLIER_CODE_PREFIX: ${SUPPLIER_CODE_PREFIX:-SUP}
+  DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-EUR}
+  ORG_DISPLAY_NAME: ${ORG_DISPLAY_NAME:-}
+  COMPARISON_OUTLIER_RATIO: ${COMPARISON_OUTLIER_RATIO:-0.5}
+  FX_MAX_AGE_DAYS: ${FX_MAX_AGE_DAYS:-30}
+  QUOTE_VALIDITY_WARNING_DAYS: ${QUOTE_VALIDITY_WARNING_DAYS:-7}
+  QUOTE_IMPORT_MAX_MB: ${QUOTE_IMPORT_MAX_MB:-5}
+  # AI providers (all optional; order = preference, unconfigured providers are skipped)
+  AI_PROVIDER_ORDER: ${AI_PROVIDER_ORDER:-local,anthropic,openai}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
+  LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.1:8b}
+  # Sourcing assistant (works without any model: deterministic mode)
+  AGENT_MODE: ${AGENT_MODE:-auto}
+  AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-4}
+  AGENT_RATE_PER_MINUTE: ${AGENT_RATE_PER_MINUTE:-20}
+  AGENT_INDEX_ON_DEMAND_DOCS: ${AGENT_INDEX_ON_DEMAND_DOCS:-20}
+  # Monitoring: bearer token Prometheus uses for /metrics
+  METRICS_TOKEN: ${METRICS_TOKEN:?run make env-upgrade (existing install) or make init}
+
+x-backend-volumes: &backend-volumes
+  - uploads:/data/uploads
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-copilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./scripts/init-env.sh first}
+      POSTGRES_DB: ${POSTGRES_DB:-copilot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-copilot} -d ${POSTGRES_DB:-copilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: copilot-backend:${APP_VERSION:-local}
+    build:
+      context: ./backend
+      target: runtime
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      <<: *backend-env
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-copilot}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    image: copilot-backend:${APP_VERSION:-local}
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: *backend-volumes
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    image: copilot-backend:${APP_VERSION:-local}
+    build:
+      context: ./backend
+      target: runtime
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: *backend-volumes
+    # The image's own health check probes the API port, which the worker does not serve. The worker touches a heartbeat
+    # file every 10 s instead; `docker compose up --wait` also needs every long-running service to report health.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; from app.jobs.worker import healthcheck; sys.exit(healthcheck())"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  minio:
+    # MinIO deleted its official images from Docker Hub (source-only distribution), so minio/minio can no longer be
+    # pulled. Silo is a maintained MinIO fork: same S3 API, server command, MINIO_* variables, /data layout and mc client.
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-copilot-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?run ./scripts/init-env.sh first}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"
+    volumes:
+      - clamav_data:/var/lib/clamav
+
+  ollama:
+    image: ollama/ollama:0.5.4
+    profiles: ["local-llm"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  frontend:
+    image: copilot-frontend:${APP_VERSION:-local}
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://backend:8000
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
+    ports:
+      # Loopback by default: publish it through the reverse proxy (docker-compose.prod.yml) or set FRONTEND_BIND=0.0.0.0
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+    volumes:
+      - mailpit:/data
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        printf '%s' "$$METRICS_TOKEN" > /tmp/metrics_token &&
+        exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=$${PROMETHEUS_RETENTION:-15d} --web.enable-lifecycle
+    environment:
+      METRICS_TOKEN: ${METRICS_TOKEN}
+      PROMETHEUS_RETENTION: ${PROMETHEUS_RETENTION:-15d}
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make env-upgrade (existing install) or make init}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/copilot.json
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:3.3.2
+    profiles: ["logging"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./infra/logging/loki.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    profiles: ["logging"]
+    restart: unless-stopped
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./infra/logging/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
+  backend-test:
+    profiles: ["test"]
+    image: copilot-backend-test:${APP_VERSION:-local}
+    build:
+      context: ./backend
+      target: test
+    environment:
+      <<: *backend-env
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      TEST_DB_HOST: db
+      TEST_DB_ADMIN_USER: ${POSTGRES_USER:-copilot}
+      TEST_DB_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  mailpit:
+  caddy_data:
+  uploads:
+  minio_data:
+  clamav_data:
+  ollama_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  alloy_data:
