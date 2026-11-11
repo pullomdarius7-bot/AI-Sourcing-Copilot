@@ -63,6 +63,13 @@ def body_text(document: dict[str, Any], contact_name: str | None, sender_name: s
     return "\n".join(lines) + "\n"
 
 
+# Header folding only. On Python 3.12 (the production image) the SMTP policy folds a subject before an encoded word
+# and leaves a space on both sides, so mail clients show a double space ("brackets  – 3 mm"). Headers up to the RFC 5322
+# line limit are then written unfolded. Bodies and attachments are encoded by set_content/add_attachment under
+# policy.SMTP and keep their 76-character lines; this policy is applied only when the finished message is serialised.
+WIRE_POLICY = policy.SMTP.clone(max_line_length=998)
+
+
 def build_package(
     document: dict[str, Any], *, content_hash: str, pdf: bytes, sender: str, reply_to: str | None,
     reply_to_name: str | None, recipients: list[dict[str, Any]], message_domain: str, generated_at: datetime | None = None,
@@ -98,7 +105,7 @@ def build_package(
     )
     msg.add_attachment(pdf, maintype="application", subtype="pdf", filename=f"{stem}.pdf")
     msg.add_attachment(machine, maintype="application", subtype="json", filename=f"{stem}.json")
-    raw = msg.as_bytes()
+    raw = msg.as_bytes(policy=WIRE_POLICY)
     manifest = {
         "rfq": document["number"],
         "version": document["version"],
@@ -116,7 +123,8 @@ def build_package(
 
 
 def parse_package(raw: bytes) -> EmailMessage:
-    return BytesParser(policy=policy.SMTP).parsebytes(raw)  # type: ignore[return-value]
+    # Parsed with the wire policy too: smtplib re-serialises with msg.policy, which must not re-fold the headers.
+    return BytesParser(policy=WIRE_POLICY).parsebytes(raw)  # type: ignore[return-value]
 
 
 def verify_package(raw: bytes, expected_sha256: str) -> bool:

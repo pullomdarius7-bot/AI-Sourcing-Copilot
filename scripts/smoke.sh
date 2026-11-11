@@ -3,7 +3,7 @@
 set -eu
 BASE="${BASE_URL:-http://localhost:${FRONTEND_PORT:-3000}}"
 MAIL="${MAIL_URL:-http://localhost:8025}"
-EMAIL="smoke-$(date +%s)@example.test"
+EMAIL="smoke-$(date +%s)@example.com"  # .test is a reserved TLD the API rejects; mail goes to Mailpit
 PASSWORD="smoke-test-password-42"
 JAR="$(mktemp)"; trap 'rm -f "$JAR"' EXIT
 
@@ -47,7 +47,7 @@ curl -fsS -b "$JAR" "$BASE/api/review/queue" | grep -q '"total"'
 curl -fsS -b "$JAR" "$BASE/api/documents/$GOOD_ID/text" | grep -q "Smoke Metals"
 echo "-> suppliers and RFQs"
 SUP_ID=$(curl -fsS -b "$JAR" -X POST "$BASE/api/suppliers" -H 'content-type: application/json' \
-  -d "{\"name\":\"Smoke Supplier $$\",\"contacts\":[{\"name\":\"Sam\",\"email\":\"sam@smoke-supplier.test\"}]}" \
+  -d "{\"name\":\"Smoke Supplier $$\",\"contacts\":[{\"name\":\"Sam\",\"email\":\"sam@smoke-supplier.example.com\"}]}" \
   | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
 [ -n "$SUP_ID" ] || { echo "supplier creation failed"; exit 1; }
 curl -fsS -b "$JAR" "$BASE/api/suppliers/$SUP_ID/qualification" | grep -q '"quality_certification"'
