@@ -58,6 +58,9 @@ class Settings(BaseSettings):
 
     # --- Job workers ---
     worker_concurrency: int = 2
+    # Touched every worker_heartbeat_seconds while the worker runs; the container health check reads its age.
+    worker_heartbeat_file: str = "/tmp/worker-heartbeat"
+    worker_heartbeat_seconds: float = 10.0
     job_poll_interval_seconds: float = 1.0
     job_timeout_seconds: int = 300
     job_visibility_seconds: int = 600

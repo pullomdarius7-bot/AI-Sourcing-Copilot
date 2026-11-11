@@ -234,3 +234,33 @@ async def test_job_endpoints_are_admin_only_and_tenant_scoped(client):
     assert (await client.get("/jobs", headers=b.headers)).json() == []
     assert (await client.post(f"/jobs/{job.id}/retry", headers=b.headers)).status_code == 404
     assert (await client.get("/jobs/stats", headers=b.headers)).json()["queued"] == 0
+
+
+# --- Heartbeat (container health check) --------------------------------------------------------------------------
+async def test_running_worker_keeps_its_heartbeat_fresh(tmp_path, monkeypatch):
+    beat = tmp_path / "heartbeat"
+    monkeypatch.setattr(worker_module.settings, "worker_heartbeat_file", str(beat))
+    monkeypatch.setattr(worker_module.settings, "worker_heartbeat_seconds", 0.05)
+    assert worker_module.healthcheck() == 1  # never started
+    stop = asyncio.Event()
+    task = asyncio.create_task(Worker().run_forever(stop))
+    for _ in range(100):
+        if beat.exists():
+            break
+        await asyncio.sleep(0.02)
+    assert worker_module.healthcheck() == 0
+    stop.set()
+    await asyncio.wait_for(task, timeout=10)
+
+
+def test_stale_heartbeat_is_unhealthy(tmp_path, monkeypatch):
+    import os
+    import time
+
+    beat = tmp_path / "heartbeat"
+    monkeypatch.setattr(worker_module.settings, "worker_heartbeat_file", str(beat))
+    worker_module.touch_heartbeat()
+    assert worker_module.healthcheck(max_age_seconds=60) == 0
+    old = time.time() - 120
+    os.utime(beat, (old, old))
+    assert worker_module.healthcheck(max_age_seconds=60) == 1

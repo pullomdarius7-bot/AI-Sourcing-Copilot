@@ -117,8 +117,14 @@ services:
     restart: unless-stopped
     environment: *backend-env
     volumes: *backend-volumes
+    # The image's own health check probes the API port, which the worker does not serve. The worker touches a heartbeat
+    # file every 10 s instead; `docker compose up --wait` also needs every long-running service to report health.
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "import sys; from app.jobs.worker import healthcheck; sys.exit(healthcheck())"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     depends_on:
       migrate:
         condition: service_completed_successfully

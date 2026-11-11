@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import socket
+import time
 import uuid
 
 from app.config import get_settings
@@ -119,9 +120,42 @@ class Worker:
                 except TimeoutError:
                     pass
 
+        async def heartbeat() -> None:
+            # Runs beside the job loops, so a long job does not make the worker look unhealthy; a crashed or frozen
+            # worker stops touching the file and the container health check fails.
+            while not stop.is_set():
+                try:
+                    touch_heartbeat()
+                except OSError:
+                    logger.exception("cannot write heartbeat file %s", settings.worker_heartbeat_file)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=settings.worker_heartbeat_seconds)
+                except TimeoutError:
+                    pass
+
         logger.info("worker %s started (concurrency=%s)", self.worker_id, settings.worker_concurrency)
-        await asyncio.gather(janitor(), *(loop(i) for i in range(settings.worker_concurrency)))
+        await asyncio.gather(heartbeat(), janitor(), *(loop(i) for i in range(settings.worker_concurrency)))
         logger.info("worker %s stopped", self.worker_id)
+
+
+def touch_heartbeat() -> None:
+    with open(settings.worker_heartbeat_file, "a"):
+        pass
+    os.utime(settings.worker_heartbeat_file)
+
+
+def heartbeat_age() -> float | None:
+    """Seconds since the worker last touched its heartbeat file, or None if it never has."""
+    try:
+        return time.time() - os.path.getmtime(settings.worker_heartbeat_file)
+    except OSError:
+        return None
+
+
+def healthcheck(max_age_seconds: float = 60) -> int:
+    """Exit status for the container health check: 0 while the heartbeat is fresh."""
+    age = heartbeat_age()
+    return 0 if age is not None and age < max_age_seconds else 1
 
 
 async def main() -> None:
