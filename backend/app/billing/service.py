@@ -16,7 +16,8 @@ from app.billing.stripe_api import get_stripe
 from app.config import get_settings
 from app.deps import Principal
 from app.errors import bad_request, conflict
-from app.models import Organization, User
+from app.marketplace import profiles
+from app.models import MarketProfile, Organization, User
 from app.onboarding import AccountType
 
 logger = logging.getLogger("app.billing")
@@ -270,5 +271,7 @@ async def handle_event(db: AsyncSession, event: dict[str, Any]) -> str:
         logger.warning("stripe event %s (%s) matches no organization", event_id, event_type)
     else:
         org.updated_at = _now()
+        if await db.get(MarketProfile, org.id) is not None:
+            await profiles.refresh(db, org.id, restore_org=None)  # the "Verified" badge follows the subscription
     await db.commit()  # the event marker, the account change and the credits commit together or not at all
     return "processed"

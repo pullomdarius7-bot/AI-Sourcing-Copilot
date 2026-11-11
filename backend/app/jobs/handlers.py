@@ -16,6 +16,7 @@ from app.files import extract as extractor
 from app.files import scan as scanner
 from app.jobs import queue
 from app.jobs.errors import PermanentError, RetryableError
+from app.marketplace import service as marketplace
 from app.models import Document, ExtractionRun, Job
 from app.storage import StorageError, get_storage
 
@@ -80,6 +81,7 @@ async def handle_scan(db: AsyncSession, job: Job) -> dict[str, Any]:
             db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.quarantined",
             meta={"document_id": str(doc.id), "signature": result.signature, "engine": result.engine},
         )
+        await marketplace.manifest_failed(db, doc, "The file failed the virus scan and was quarantined")
         await db.commit()
         try:
             await get_storage().delete(backend, key)  # type: ignore[arg-type]
@@ -108,11 +110,19 @@ async def handle_extract(db: AsyncSession, job: Job) -> dict[str, Any]:
         raise PermanentError(str(exc)) from exc
     doc.file_metadata = {**extracted.metadata, "text_chars": len(extracted.text)}
     doc.extracted_text = extracted.text or None
+    if doc.purpose == "manifest":
+        # A supplier manifest is normalized into lot lines instead of being analysed as a sourcing document.
+        doc.status, doc.analysis_status, doc.updated_at = "processed", "skipped", _now()
+        doc.processed_at = _now()
+        await marketplace.manifest_ready(db, doc)
+        await db.commit()
+        return {"text_chars": len(extracted.text), "manifest": True}
     doc.status, doc.analysis_status, doc.updated_at = "analyzing", "pending", _now()
     await queue.enqueue(
         db, org_id=doc.organization_id, kind=ANALYZE, payload={"document_id": str(doc.id)},
         dedupe_key=f"{ANALYZE}:{doc.id}",
     )
+    await marketplace.manifest_ready(db, doc)  # a sourcing file re-uploaded as a manifest
     await db.commit()
     return {"text_chars": len(extracted.text)}
 
@@ -151,6 +161,7 @@ async def dead_pipeline_step(db: AsyncSession, job: Job, error: str) -> None:
     if doc is None or doc.status == "quarantined":
         return
     doc.status, doc.error, doc.updated_at = "failed", error[:2000], _now()
+    await marketplace.manifest_failed(db, doc, error)
     record(
         db, org_id=doc.organization_id, user_id=doc.uploaded_by, action="document.failed",
         meta={"document_id": str(doc.id), "step": job.kind, "error": error[:300]},
@@ -267,9 +278,11 @@ async def dead_send_package(db: AsyncSession, job: Job, error: str) -> None:
 Handler = Callable[[AsyncSession, Job], Awaitable[dict[str, Any] | None]]
 HANDLERS: dict[str, Handler] = {
     SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze, REQUIREMENTS: handle_requirements,
-    SEND_PACKAGE: handle_send_package,
+    SEND_PACKAGE: handle_send_package, marketplace.NORMALIZE: marketplace.handle_normalize,
+    marketplace.ANALYZE_LOT: marketplace.handle_analysis,
 }
 ON_DEAD: dict[str, Callable[[AsyncSession, Job, str], Awaitable[None]]] = {
     SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze, REQUIREMENTS: dead_requirements,
-    SEND_PACKAGE: dead_send_package,
+    SEND_PACKAGE: dead_send_package, marketplace.NORMALIZE: marketplace.dead_normalize,
+    marketplace.ANALYZE_LOT: marketplace.dead_analysis,
 }

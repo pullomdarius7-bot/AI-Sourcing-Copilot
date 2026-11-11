@@ -105,7 +105,7 @@ def parse_number(value: Any, decimal: str | None = None) -> Decimal | None:
         return None
 
 
-def _rows_from_csv(data: bytes) -> list[list[Any]]:
+def _rows_from_csv(data: bytes, limit: int = MAX_ROWS) -> list[list[Any]]:
     for encoding in ("utf-8-sig", "cp1252"):
         try:
             text = data.decode(encoding)
@@ -116,10 +116,10 @@ def _rows_from_csv(data: bytes) -> list[list[Any]]:
         raise IngestError("The file is not readable text")
     first = next((ln for ln in text.splitlines() if ln.strip()), "")
     delimiter = max(",;\t|", key=lambda d: (first.count(d), d == ","))  # most frequent in the header line
-    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)][: MAX_ROWS + 20]
+    return [row for row in csv.reader(io.StringIO(text), delimiter=delimiter)][: limit + 20]
 
 
-def _rows_from_xlsx(data: bytes) -> list[list[Any]]:
+def _rows_from_xlsx(data: bytes, limit: int = MAX_ROWS) -> list[list[Any]]:
     from openpyxl import load_workbook
 
     try:
@@ -129,7 +129,7 @@ def _rows_from_xlsx(data: bytes) -> list[list[Any]]:
     try:
         ws = wb.worksheets[0]
         rows = []
-        for row in ws.iter_rows(values_only=True, max_row=MAX_ROWS + 20):
+        for row in ws.iter_rows(values_only=True, max_row=limit + 20):
             rows.append(list(row))
         return rows
     finally:

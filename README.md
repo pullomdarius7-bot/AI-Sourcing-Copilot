@@ -387,3 +387,57 @@ cancellation. `/billing` shows the plan, the plans available, the portal and the
 Migration `0010` renames `credit_ledgers` to `credit_transactions`, adds the action, the subject and the
 held/settled/refunded state, adds the subscription columns and `stripe_events`, and starts a standard trial for
 accounts that existed before trials did.
+
+## Phase 4: two-sided marketplace, supplier ingestion and masked RFQs
+
+**Supplier side (`/supplier/manifests`).** A supplier uploads a manifest (CSV, XLSX or PDF). It goes through the
+same upload checks and virus scan as any document, then a `manifest.normalize` job turns it into lot lines:
+
+- Rules first, always: the header row is found by column name, quantities and prices are parsed exactly, the
+  condition grade (`new`, `like_new`, `customer_return`, `salvage`), category, brand, UPC, ASIN and model number
+  are mapped from vocabularies, unit MSRP is derived from extended retail, and totals rows are skipped.
+- Then the AI model, when one is configured and the account can pay (Phase 3 gateway, `manifest_extraction`
+  pricing). It cleans titles and fills brand, category, condition and identifiers in batches. It never supplies
+  quantities or prices, and each value must be traceable to its row: invented brands, identifiers or words, and
+  changed model-number spellings, are rejected and flagged. Without credits the rules result is kept.
+- PDF manifests have no table, so they need the model; every line it returns must quote a line of the PDF text
+  that contains its numbers.
+- Phone numbers, emails, links and the supplier's own company name are removed from titles.
+
+The supplier then sets the lot type (single pallet, multi-pallet, truckload), the Buy-It-Now price, a private
+reserve, the dispatch ZIP, loading conditions (liftgate, dock-high only, local pickup) and private pickup details,
+and publishes. Publishing needs an active subscription or trial (402 otherwise).
+
+**Buyer side (`/marketplace`).** Buyers filter published lots by category, condition, lot size, region, minimum
+estimated margin, price and text. Each lot shows total units, total MSRP, asking price, estimated resale value and
+gross margin (condition and category recovery rates, `backend/app/marketplace/valuation.py`) and the grade mix.
+"Run AI Deep Analysis" costs 1 credit (`deep_analysis`, 402 without credits) and produces an itemized net profit
+model: resale value per item (model estimates kept only within 2-100% of MSRP), channel fees, refurbishment,
+unsellable units, freight, net profit, ROI, a maximum bid at the buyer's target margin and a buy / negotiate /
+pass call.
+
+**Masking.** Buyers never see the seller's company, people, email, phone, reserve, pickup address or full ZIP
+(only region and the first three digits); sellers never see the buyer's. Each side appears under a stable alias
+and earned badges ("Verified Liquidator - Midwest Hub", "10+ Lots Completed"); "Verified" means a paid
+subscription. This is enforced by row-level security, not only by the API:
+
+| Table | Who can read it |
+|---|---|
+| `marketplace_lots`, `lot_items` | The supplier; everyone else only while the lot is published or sold |
+| `lot_private_details` (reserve, pickup) | The supplier only |
+| `market_profiles` (alias, badges) | Everyone; written only by the system |
+| `lot_analyses` | The buyer who paid for it |
+| `rfq_threads`, `rfq_thread_events` | The two parties of the negotiation only |
+| `rfq_moderation` (text before scrubbing) | The author's account only |
+
+**Negotiation (`/messages`, `/rfq/[id]`).** "Submit Offer / Request Quote" opens a thread with a price, freight
+terms (buyer or seller arranges), a target close date and custom terms. The party facing an offer can accept,
+decline or counter; the author can withdraw. Offers below the private reserve are declined automatically without
+revealing it. Messages and terms are scrubbed of emails (also "name at gmail dot com"), phone numbers, links,
+payment links and handles, with a warning to the sender; mentions of off-platform payment are flagged. Every step
+is an append-only, hash-chained event (the app role can only insert), and the page shows whether the chain
+verifies. Acceptance marks the lot sold, closes other buyers' negotiations, updates the badges, and releases both
+parties' company and contact details and the pickup address inside the thread. Every offer, counter, decision and
+message emails the other side with masked identities only.
+
+Migration `0011` adds the tables above and `documents.purpose`; `alembic downgrade 0010` removes them.

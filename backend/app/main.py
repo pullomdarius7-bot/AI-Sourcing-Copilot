@@ -21,6 +21,7 @@ from app.routers import (
     documents,
     health,
     jobs,
+    marketplace,
     onboarding,
     requirements,
     rfqs,
@@ -146,6 +147,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(onboarding.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(billing.webhooks, prefix="/api/v1")
+app.include_router(marketplace.router, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")

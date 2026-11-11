@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -206,6 +206,8 @@ class Document(TenantMixin, Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_backend: Mapped[str | None] = mapped_column(String(20))
     storage_key: Mapped[str | None] = mapped_column(String(300))
+    # sourcing (documents, quotes, RFQs) | manifest (a supplier's marketplace manifest)
+    purpose: Mapped[str] = mapped_column(String(12), nullable=False, default="sourcing")
     # uploaded | scanning | extracting | analyzing | processed | quarantined | failed
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploaded")
     scan_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
@@ -801,4 +803,180 @@ class AgentReport(TenantMixin, Base):
     sources: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = _created()
+
+
+# --- Marketplace ----------------------------------------------------------------------------------------------
+class MarketProfile(Base):
+    """The masked public face of an account in the marketplace. Readable by every account."""
+
+    __tablename__ = "market_profiles"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    alias: Mapped[str] = mapped_column(String(24), nullable=False, unique=True)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)  # buyer | seller
+    label: Mapped[str] = mapped_column(String(40), nullable=False)  # Liquidator, Wholesaler, Reseller, Buying team
+    hub_region: Mapped[str | None] = mapped_column(String(12))
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    completed_deals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    member_since: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = _created()
+
+
+class MarketplaceLot(TenantMixin, Base):
+    """A supplier's lot: the normalized manifest plus the listing details. Visible to every account while
+    published; holds no contact details (those live in LotPrivateDetails)."""
+
+    __tablename__ = "marketplace_lots"
+
+    id: Mapped[uuid.UUID] = _pk()
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    default_condition: Mapped[str | None] = mapped_column(String(20))
+    ingest_status: Mapped[str] = mapped_column(String(12), nullable=False, default="processing")  # processing | ready | failed
+    ingest_method: Mapped[str | None] = mapped_column(String(8))  # rules | ai
+    ingest_error: Mapped[str | None] = mapped_column(Text)
+    ingest_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="draft")  # draft | published | sold | withdrawn
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    description: Mapped[str | None] = mapped_column(Text)
+    lot_type: Mapped[str | None] = mapped_column(String(14))  # single_pallet | multi_pallet | truckload
+    pallet_count: Mapped[int | None] = mapped_column(Integer)
+    asking_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))  # Buy-It-Now
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    dispatch_zip: Mapped[str | None] = mapped_column(String(5))
+    region: Mapped[str | None] = mapped_column(String(12))
+    liftgate_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dock_high_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    local_pickup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_msrp: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    est_resale: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    est_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    primary_category: Mapped[str | None] = mapped_column(String(20))
+    categories: Mapped[list[str]] = mapped_column(ARRAY(String(20)), nullable=False, default=list)
+    conditions: Mapped[list[str]] = mapped_column(ARRAY(String(20)), nullable=False, default=list)
+    condition_mix: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    category_mix: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _created()
+
+
+class LotItem(TenantMixin, Base):
+    __tablename__ = "lot_items"
+
+    id: Mapped[uuid.UUID] = _pk()
+    lot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_line: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    brand: Mapped[str | None] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(20), nullable=False)
+    condition: Mapped[str] = mapped_column(String(20), nullable=False)
+    upc: Mapped[str | None] = mapped_column(String(14))
+    asin: Mapped[str | None] = mapped_column(String(10))
+    model_number: Mapped[str | None] = mapped_column(String(60))
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_msrp: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))  # wholesale asking per unit, if the manifest has it
+    method: Mapped[str] = mapped_column(String(8), nullable=False)  # rules | ai
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+
+
+class LotPrivateDetails(TenantMixin, Base):
+    """Seller-only: never readable by another account (released to the buyer only when an offer is accepted)."""
+
+    __tablename__ = "lot_private_details"
+
+    lot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"), primary_key=True
+    )
+    reserve_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    pickup_address: Mapped[str | None] = mapped_column(Text)
+    pickup_contact: Mapped[str | None] = mapped_column(String(200))
+    pickup_phone: Mapped[str | None] = mapped_column(String(40))
+    pickup_notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = _created()
+
+
+class LotAnalysis(TenantMixin, Base):
+    """A buyer's paid deep analysis of a marketplace lot. Belongs to the buyer."""
+
+    __tablename__ = "lot_analyses"
+
+    id: Mapped[uuid.UUID] = _pk()
+    lot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"), nullable=False)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="queued")  # queued | running | succeeded | failed
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    method: Mapped[str | None] = mapped_column(String(8))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RfqThread(Base):
+    """A negotiation between one buyer and the seller of a lot. Readable only by the two parties."""
+
+    __tablename__ = "rfq_threads"
+
+    id: Mapped[uuid.UUID] = _pk()
+    lot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("marketplace_lots.id", ondelete="CASCADE"), nullable=False)
+    buyer_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    supplier_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    lot_title: Mapped[str] = mapped_column(String(200), nullable=False)  # kept even if the lot is withdrawn later
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="open")  # open | accepted | declined | withdrawn | closed
+    closed_reason: Mapped[str | None] = mapped_column(String(40))
+    offer_by: Mapped[str | None] = mapped_column(String(8))  # buyer | supplier: who made the offer on the table
+    offer_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    shipping_terms: Mapped[str | None] = mapped_column(String(16))  # buyer_freight | seller_freight
+    target_close_date: Mapped[Any] = mapped_column(Date)
+    custom_terms: Mapped[str | None] = mapped_column(Text)
+    agreed_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    revealed: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # contact details, released on acceptance
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_event_at: Mapped[datetime] = _created()
+    created_at: Mapped[datetime] = _created()
+
+
+class RfqThreadEvent(Base):
+    """Append-only, hash-chained record of every offer, counteroffer, decision and message."""
+
+    __tablename__ = "rfq_thread_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("rfq_threads.id", ondelete="CASCADE"), nullable=False)
+    buyer_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    supplier_org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_side: Mapped[str] = mapped_column(String(8), nullable=False)  # buyer | supplier | system
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # offer | counter | accept | decline | withdraw | message | auto_decline | closed
+    kind: Mapped[str] = mapped_column(String(14), nullable=False)
+    offer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    body: Mapped[str | None] = mapped_column(Text)
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    prev_hash: Mapped[str | None] = mapped_column(String(64))
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RfqModeration(TenantMixin, Base):
+    """What a participant actually typed before contact details were removed. Only the author's account sees it."""
+
+    __tablename__ = "rfq_moderation"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("rfq_threads.id", ondelete="CASCADE"), nullable=False)
+    event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    author_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    original: Mapped[str] = mapped_column(Text, nullable=False)
+    flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = _created()

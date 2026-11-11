@@ -41,7 +41,9 @@ async def read_limited(upload: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
-async def upload_document(db: AsyncSession, p: Principal, upload: UploadFile) -> tuple[Document, bool]:
+async def upload_document(
+    db: AsyncSession, p: Principal, upload: UploadFile, purpose: str = "sourcing"
+) -> tuple[Document, bool]:
     filename = sanitize_filename(upload.filename or "")
     if not filename:
         raise bad_request("invalid_filename", "The file needs a name")
@@ -71,7 +73,7 @@ async def upload_document(db: AsyncSession, p: Principal, upload: UploadFile) ->
         doc = Document(
             organization_id=org_id, uploaded_by=p.user.id, filename=filename,
             content_type=detected.content_type, size_bytes=len(data), sha256=digest,
-            storage_backend=backend, storage_key=f"{org_id}/{digest}", status="uploaded",
+            storage_backend=backend, storage_key=f"{org_id}/{digest}", status="uploaded", purpose=purpose,
         )
         try:
             async with db.begin_nested():
@@ -86,13 +88,15 @@ async def upload_document(db: AsyncSession, p: Principal, upload: UploadFile) ->
                 meta={"document_id": str(doc.id), "filename": filename, "size": len(data), "sha256": digest},
             )
             await db.refresh(doc)
-            await db.commit()
-            return doc, False
+            if purpose == "sourcing":
+                await db.commit()
+            return doc, False  # a manifest upload commits together with its lot
 
     assert found is not None
     record(
         db, org_id=org_id, user_id=p.user.id, action="document.duplicate_detected", ip=p.ip,
         meta={"document_id": str(found.id), "filename": filename, "sha256": digest},
     )
-    await db.commit()
+    if purpose == "sourcing":
+        await db.commit()
     return found, True

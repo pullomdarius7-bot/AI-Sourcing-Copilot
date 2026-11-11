@@ -5,6 +5,7 @@ import logging
 import secrets
 import time
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +66,16 @@ def line_items(doc: Document) -> int:
     return sum(1 for line in (doc.extracted_text or "").splitlines() if line.strip())
 
 
+@dataclass
+class AiSubject:
+    """What a structured call is about when it is not an uploaded document (e.g. a marketplace analysis).
+    Its id is recorded as the document_id of the AI audit log."""
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    filename: str
+
+
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -80,7 +91,7 @@ class AIService:
         return self._providers
 
     async def _audit(
-        self, db: AsyncSession, doc: Document, user_id: uuid.UUID | None, provider: LLMProvider,
+        self, db: AsyncSession, doc: "Document | AiSubject", user_id: uuid.UUID | None, provider: LLMProvider,
         purpose: str = PURPOSE, **fields,
     ) -> None:
         db.add(
@@ -185,7 +196,7 @@ class AIService:
     async def structured_call(
         self,
         db: AsyncSession,
-        doc: Document,
+        doc: "Document | AiSubject",
         *,
         permit: gateway.Permit,
         user_id: uuid.UUID | None,

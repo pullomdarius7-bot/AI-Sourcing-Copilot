@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Building2, ClipboardCheck, CreditCard, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, ClipboardCheck, CreditCard, MessagesSquare, PackageOpen, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -12,16 +12,20 @@ import { Badge } from "@/components/ui/badge";
 import { CreditBanner, CreditWidget } from "@/components/credit-widget";
 import { MeProvider } from "@/components/me-context";
 
-const NAV = [
+type Side = "buyer" | "supplier";
+const NAV: { href: string; label: string; icon: typeof LayoutDashboard; permission: string | null; side?: Side }[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: null },
-  { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use" },
-  { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read" },
-  { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload" },
-  { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read" },
-  { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review" },
-  { href: "/suppliers", label: "Suppliers", icon: Building2, permission: "suppliers:read" },
-  { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read" },
-  { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read" },
+  { href: "/marketplace", label: "Marketplace", icon: Store, permission: "marketplace:read", side: "buyer" },
+  { href: "/supplier/manifests", label: "Manifests & lots", icon: PackageOpen, permission: "marketplace:read", side: "supplier" },
+  { href: "/messages", label: "Offers & messages", icon: MessagesSquare, permission: "marketplace:read" },
+  { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use", side: "buyer" },
+  { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read", side: "buyer" },
+  { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload", side: "buyer" },
+  { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read", side: "buyer" },
+  { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review", side: "buyer" },
+  { href: "/suppliers", label: "Suppliers", icon: Building2, permission: "suppliers:read", side: "buyer" },
+  { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read", side: "buyer" },
+  { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read", side: "buyer" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
   { href: "/billing", label: "Billing", icon: CreditCard, permission: null },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
@@ -64,7 +68,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:pb-0">
-            {NAV.filter((n) => (!n.permission || me.permissions.includes(n.permission)) && !(n.href === "/team" && me.account_type === "solo_buyer")).map((n) => {
+            {NAV.filter((n) => {
+              const side: Side = me.account_type === "supplier" ? "supplier" : "buyer";
+              if (n.permission && !me.permissions.includes(n.permission)) return false;
+              if (n.side && n.side !== side) return false;
+              return !(n.href === "/team" && me.account_type === "solo_buyer");
+            }).map((n) => {
               const active = pathname.startsWith(n.href);
               return (
                 <Link

@@ -38,11 +38,15 @@ class Permission(StrEnum):
     REFERENCE_MANAGE = "reference:manage"  # exchange rates and unit conversion rules
     AGENT_USE = "agent:use"  # ask the sourcing agent (answers only from data the user may read)
     AGENT_AUDIT = "agent:audit"  # read every agent run in the organization
+    MARKETPLACE_READ = "marketplace:read"  # browse lots and read the account's negotiations
+    MARKETPLACE_TRADE = "marketplace:trade"  # run paid analyses, make, answer and accept offers, send messages
+    LISTINGS_MANAGE = "listings:manage"  # supplier side: upload manifests, edit and publish lots
 
 
 _BASE = {
     Permission.ORG_READ, Permission.DOCUMENTS_READ, Permission.REQUIREMENTS_READ,
     Permission.SUPPLIERS_READ, Permission.RFQS_READ, Permission.COMPARISONS_READ, Permission.AGENT_USE,
+    Permission.MARKETPLACE_READ,
 }
 _UPLOAD = {Permission.DOCUMENTS_UPLOAD, Permission.REQUIREMENTS_EXTRACT}
 
@@ -52,12 +56,14 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
         _BASE | _UPLOAD | {
             Permission.DOCUMENTS_DELETE, Permission.REQUIREMENTS_REVIEW, Permission.SUPPLIERS_MANAGE,
             Permission.RFQS_MANAGE, Permission.QUOTES_MANAGE, Permission.COMPARISONS_RUN,
+            Permission.MARKETPLACE_TRADE, Permission.LISTINGS_MANAGE,
         }
     ),
     Role.APPROVER: frozenset(
         _BASE | {
             Permission.REQUIREMENTS_REVIEW, Permission.REQUIREMENTS_APPROVE, Permission.SUPPLIERS_QUALIFY,
             Permission.RFQS_APPROVE, Permission.COMPARISONS_RUN, Permission.REFERENCE_MANAGE,
+            Permission.MARKETPLACE_TRADE,
         }
     ),
     Role.AUDITOR: frozenset(_BASE | {Permission.USERS_READ, Permission.AUDIT_READ, Permission.AGENT_AUDIT}),

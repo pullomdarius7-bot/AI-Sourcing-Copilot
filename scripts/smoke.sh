@@ -29,6 +29,9 @@ curl -fsS -b "$JAR" "$BASE/api/auth/me" | grep -q '"credit_balance":10' || { ech
 curl -fsS -b "$JAR" "$BASE/api/billing" | grep -q '"subscription_status":"none"' || { echo "billing summary is not available"; exit 1; }
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/webhooks/stripe" -H 'content-type: application/json' -d '{}')
 case "$CODE" in 400|503) ;; *) echo "an unsigned Stripe webhook must be refused, got $CODE"; exit 1 ;; esac
+echo "-> marketplace (buyer account)"
+curl -fsS -b "$JAR" "$BASE/api/marketplace/lots" | grep -q '"total"' || { echo "marketplace is not reachable"; exit 1; }
+curl -fsS -b "$JAR" "$BASE/api/rfq-threads" | grep -q '^\[' || { echo "negotiations are not reachable"; exit 1; }
 echo "-> public landing page"
 curl -fsS "$BASE/" | grep -q 'Stop guessing on blind pallets' || { echo "landing page is not served at /"; exit 1; }
 echo "-> upload documents (clean file + EICAR test file)"
