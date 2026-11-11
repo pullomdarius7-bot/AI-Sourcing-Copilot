@@ -441,3 +441,32 @@ parties' company and contact details and the pickup address inside the thread. E
 message emails the other side with masked identities only.
 
 Migration `0011` adds the tables above and `documents.purpose`; `alembic downgrade 0010` removes them.
+
+## Pricing, seats and pay-as-you-go credits
+
+**One price list.** `backend/app/billing/plans.py` is the only place prices, monthly credits, seats and top-up
+prices are defined. The public pricing page reads them from `GET /api/v1/billing/plans` (no sign-in). When the API
+is unreachable it falls back to `frontend/src/lib/plans.ts`, and a backend test fails if that copy drifts from the
+catalog or if the landing page hard-codes a price, credit or seat number again.
+
+| Plan | Price | Credits a month | Seats | Extra credit |
+|---|---|---|---|---|
+| Solo Operator (`solo_buyer_monthly`) | $79 | 25 | 1 | $3.50 |
+| Sourcing Team (`enterprise_buyer_monthly`) | $249 | 250 | 5 | $1.25 |
+| Verified Supplier (`supplier_monthly`) | $149 | 100 | unlimited | $1.75 |
+
+**Seats.** A seat is an active user or an open invitation. Inviting, reactivating someone or accepting an
+invitation is refused with `409 seat_limit_reached` (with `seats_used` and `seat_limit`) when no seat is free.
+Before subscribing, a team account has `TRIAL_SEATS` (5) and a solo account 1. After a downgrade nobody is
+removed, but no one new can join until the account is back under its limit. `GET /api/v1/seats` and the Team and
+Billing pages show the usage.
+
+**Pay-as-you-go credits.** A subscriber whose balance is down to `TOPUP_AVAILABLE_AT_OR_BELOW` (2) credits or
+fewer can buy 5 to 500 extra credits at the plan's per-credit price from the Billing page
+(`POST /api/v1/billing/create-topup-session`, a one-off Stripe Checkout payment; no Stripe price setup needed).
+Credits are granted when Stripe confirms the payment (`checkout.session.completed`, or
+`checkout.session.async_payment_succeeded` for delayed payment methods), once per session, and only if the amount
+paid matches the credits priced. Bought credits are spent after the month's plan credits, roll over at renewal and
+are kept if the subscription ends (they can be used again after resubscribing). A 402 for missing credits says
+whether a top-up is possible (`can_top_up`). Trial accounts cannot buy credits; they choose a plan.
+Migration `0012` adds `organizations.purchased_credits`.

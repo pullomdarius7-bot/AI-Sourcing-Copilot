@@ -52,10 +52,12 @@ export function CreditBanner({ me }: { me: Me }) {
   } else if (!me.ai_access) {
     message = "Your free trial has ended. Choose a plan to keep analysing manifests.";
   } else if (me.credit_balance <= LOW_CREDITS) {
+    const subscribed = me.subscription_status === "active" || me.subscription_status === "trialing";
     message =
-      me.credit_balance === 0
+      (me.credit_balance === 0
         ? "You have no credits left. New uploads will not be analysed until you add credits."
-        : `Only ${me.credit_balance} ${me.credit_balance === 1 ? "credit" : "credits"} left.`;
+        : `Only ${me.credit_balance} ${me.credit_balance === 1 ? "credit" : "credits"} left.`) +
+      (subscribed ? " Buy extra credits pay-as-you-go, no plan change needed." : "");
   }
   if (!message) return null;
   return (

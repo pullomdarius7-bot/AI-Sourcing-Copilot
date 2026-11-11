@@ -451,6 +451,10 @@ async def accept_invitation(
         raise bad_request("invalid_token", "This invitation is invalid or has expired")
     if await db.scalar(select(User.id).where(User.email == invite.email)):
         raise conflict("email_taken", "An account with this email already exists")
+    from app.billing import seats
+
+    org = await db.scalar(select(Organization).where(Organization.id == invite.organization_id).with_for_update())
+    await seats.ensure_free_seat(db, org, already_counted=True)  # the plan may have shrunk since the invitation
     now = utcnow()
     user = User(
         organization_id=invite.organization_id,

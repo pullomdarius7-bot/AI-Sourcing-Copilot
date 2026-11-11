@@ -83,6 +83,34 @@ class StripeAPI:
         )
         return session.url
 
+    async def create_topup_session(
+        self, *, customer: str, credits: int, unit_amount_cents: int, organization_id: str, metadata: dict[str, str],
+        success_url: str, cancel_url: str,
+    ) -> str:
+        """One-off payment for extra credits: the buyer pays exactly for the number of credits chosen."""
+        session = await asyncio.to_thread(
+            self._client.v1.checkout.sessions.create,
+            params={
+                "mode": "payment",
+                "customer": customer,
+                "client_reference_id": organization_id,
+                "line_items": [{
+                    "quantity": credits,
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": unit_amount_cents,
+                        "product_data": {"name": "Analysis credits",
+                                         "description": "Pay-as-you-go credits; they roll over while you are subscribed."},
+                    },
+                }],
+                "metadata": metadata,
+                "payment_intent_data": {"metadata": metadata},
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+            },
+        )
+        return session.url
+
     async def create_portal_session(self, *, customer: str, return_url: str) -> str:
         session = await asyncio.to_thread(
             self._client.v1.billing_portal.sessions.create, params={"customer": customer, "return_url": return_url}

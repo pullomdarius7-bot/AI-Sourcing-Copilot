@@ -24,6 +24,7 @@ logger = logging.getLogger("app.billing")
 settings = get_settings()
 
 LIVE_STATUSES = ("trialing", "active", "past_due")
+TOPUP = "credit_topup"
 _STRIPE_STATUS = {
     "trialing": "trialing", "active": "active",
     "past_due": "past_due", "unpaid": "past_due", "incomplete": "past_due", "paused": "past_due",
@@ -80,6 +81,64 @@ async def create_checkout(db: AsyncSession, p: Principal, plan_key: str) -> str:
         success_url=f"{settings.app_base_url}/billing?checkout=success",
         cancel_url=f"{settings.app_base_url}/billing?checkout=cancelled",
     )
+
+
+# --- Pay-as-you-go top-ups ---------------------------------------------------------------------------
+def topup_status(org: Organization) -> tuple[bool, str | None, Plan | None]:
+    """Whether the account may buy extra credits now, and why not. Top-ups are for subscribers who have run out
+    (or nearly out) of their monthly credits; they are not a way around the free trial."""
+    plan = PLANS.get(org.plan or "")
+    if org.subscription_status not in ("active", "trialing") or plan is None:
+        return False, "Extra credits are available to subscribers. Choose a plan first.", plan
+    if org.credit_balance > settings.topup_available_at_or_below:
+        return False, (f"Extra credits become available when you are down to {settings.topup_available_at_or_below} "
+                       "credits or fewer."), plan
+    return True, None, plan
+
+
+async def create_topup(db: AsyncSession, p: Principal, credits: int) -> str:
+    available, reason, plan = topup_status(p.org)
+    if not available or plan is None:
+        raise conflict("topup_unavailable", reason or "Extra credits are not available")
+    if not settings.topup_min_credits <= credits <= settings.topup_max_credits:
+        raise bad_request("invalid_quantity",
+                          f"Buy between {settings.topup_min_credits} and {settings.topup_max_credits} credits")
+    customer = await ensure_customer(db, p)
+    metadata = {
+        "organization_id": str(p.org_id), "user_id": str(p.user.id), "kind": TOPUP,
+        "credits": str(credits), "unit_amount": str(plan.topup_price_cents),
+    }
+    return await get_stripe().create_topup_session(
+        customer=customer, credits=credits, unit_amount_cents=plan.topup_price_cents, organization_id=str(p.org_id),
+        metadata=metadata, success_url=f"{settings.app_base_url}/billing?topup=success",
+        cancel_url=f"{settings.app_base_url}/billing?topup=cancelled",
+    )
+
+
+async def _topup_paid(db: AsyncSession, obj: dict[str, Any]) -> Organization | None:
+    """Grant purchased credits once Stripe confirms the money arrived. The amount is checked against what was
+    priced at checkout, so a tampered or partial session grants nothing."""
+    if obj.get("payment_status") != "paid":
+        return None  # delayed payment methods: checkout.session.async_payment_succeeded follows
+    org = await _find_org(db, obj)
+    if org is None:
+        return None
+    try:
+        credits = int(_get(obj, "metadata", "credits"))
+        unit = int(_get(obj, "metadata", "unit_amount"))
+    except (TypeError, ValueError):
+        logger.error("top-up session %s has no credit metadata", obj.get("id"))
+        return org
+    if credits <= 0 or obj.get("amount_total") != credits * unit or (obj.get("currency") or "usd") != "usd":
+        logger.error("top-up session %s: amount %s does not match %s credits at %s", obj.get("id"),
+                     obj.get("amount_total"), credits, unit)
+        return org
+    entry = await ledger.post(db, org.id, credits, "purchase", reference=f"topup:{obj.get('id')}", purchased=True,
+                              note=f"{credits} credits bought")
+    record(db, org_id=org.id, user_id=None, action="billing.credits_purchased",
+           meta={"credits": credits, "amount": obj.get("amount_total"), "session": obj.get("id"),
+                 "balance": entry.balance_after})
+    return org
 
 
 async def create_portal(db: AsyncSession, p: Principal) -> str:
@@ -144,6 +203,8 @@ def _apply_plan(org: Organization, plan: Plan | None) -> None:
 
 
 async def _checkout_completed(db: AsyncSession, obj: dict[str, Any]) -> Organization | None:
+    if obj.get("mode") == "payment" and _get(obj, "metadata", "kind") == TOPUP:
+        return await _topup_paid(db, obj)
     org = await _find_org(db, obj)
     if org is None or obj.get("mode") != "subscription":
         return None
@@ -245,6 +306,7 @@ async def _subscription_deleted(db: AsyncSession, obj: dict[str, Any]) -> Organi
 
 HANDLERS = {
     "checkout.session.completed": _checkout_completed,
+    "checkout.session.async_payment_succeeded": _checkout_completed,
     "invoice.payment_succeeded": _invoice_paid,
     "invoice.payment_failed": _invoice_failed,
     "customer.subscription.updated": _subscription_updated,

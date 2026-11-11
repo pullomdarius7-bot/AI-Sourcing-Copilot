@@ -16,7 +16,10 @@ export interface Billing {
   can_manage: boolean;
   has_billing_profile: boolean;
   checkout_trial_days: number | null;
-  plans: { key: string; name: string; price_cents: number; monthly_credits: number; seats: number | null }[];
+  purchased_credits: number;
+  topup: { available: boolean; reason: string | null; price_cents: number | null; min_credits: number; max_credits: number; available_at_or_below: number };
+  seats: { used: number; limit: number | null };
+  plans: { key: string; name: string; price_cents: number; monthly_credits: number; seats: number | null; topup_price_cents: number }[];
   transactions: {
     id: number;
     kind: string;

@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     plan_credits_supplier: int = 100
     credit_cost_deep_analysis: int = 1
     credit_cost_assistant_answer: int = 1
+    # Pay-as-you-go top-ups for subscribers who run out: price per credit by plan, pack size limits, and how low
+    # the balance must be before a top-up can be bought.
+    topup_price_cents_solo: int = 350
+    topup_price_cents_enterprise: int = 125
+    topup_price_cents_supplier: int = 175
+    topup_min_credits: int = 5
+    topup_max_credits: int = 500
+    topup_available_at_or_below: int = 2
+    # People (active users plus open invitations) an organization buyer account may have before it subscribes.
+    trial_seats: int = 5
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 30

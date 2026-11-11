@@ -40,9 +40,10 @@ async def lock(db: AsyncSession, org_id: uuid.UUID) -> Organization:
 async def post(
     db: AsyncSession, org_id: uuid.UUID, delta: int, kind: str, *,
     user_id: uuid.UUID | None = None, reference: str | None = None, note: str | None = None,
-    action: str | None = None, subject_id: uuid.UUID | None = None, state: str = "settled",
+    action: str | None = None, subject_id: uuid.UUID | None = None, state: str = "settled", purchased: bool = False,
 ) -> CreditTransaction:
-    """Add (delta > 0) or spend (delta < 0) credits. A repeated reference returns the original entry unchanged."""
+    """Add (delta > 0) or spend (delta < 0) credits. A repeated reference returns the original entry unchanged.
+    purchased=True adds to the bought pool. Spending takes plan credits first, then bought ones."""
     if delta == 0:
         raise ValueError("delta must not be zero")
     org = await lock(db, org_id)
@@ -58,6 +59,9 @@ async def post(
     if balance < 0:
         raise InsufficientCredits(org.credit_balance)
     org.credit_balance = balance
+    if purchased and delta > 0:
+        org.purchased_credits += delta
+    org.purchased_credits = min(org.purchased_credits, balance)
     entry = CreditTransaction(
         organization_id=org_id, user_id=user_id, kind=kind, delta=delta, balance_after=balance,
         reference=reference, note=note, action=action, subject_id=subject_id, state=state,
@@ -77,17 +81,20 @@ async def set_balance(db: AsyncSession, org_id: uuid.UUID, amount: int, *, refer
     )
     if seen is not None:
         return False
-    if org.credit_balance > 0:
-        await post(db, org_id, -org.credit_balance, "expiry", reference=f"{reference}:expiry",
-                   note="Unused credits do not roll over")
+    unused_plan = org.credit_balance - org.purchased_credits
+    if unused_plan > 0:
+        await post(db, org_id, -unused_plan, "expiry", reference=f"{reference}:expiry",
+                   note="Unused plan credits do not roll over (purchased credits do)")
     await post(db, org_id, amount, "plan_grant", reference=reference, note=note)
     return True
 
 
 async def wipe(db: AsyncSession, org_id: uuid.UUID, *, reference: str, note: str) -> None:
+    """Remove the subscription-granted credits. Credits bought as top-ups stay (they need a plan to be spent)."""
     org = await lock(db, org_id)
-    if org.credit_balance > 0:
-        await post(db, org_id, -org.credit_balance, "expiry", reference=reference, note=note)
+    unused_plan = org.credit_balance - org.purchased_credits
+    if unused_plan > 0:
+        await post(db, org_id, -unused_plan, "expiry", reference=reference, note=note)
 
 
 async def grant_trial(db: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID | None) -> CreditTransaction:

@@ -15,18 +15,21 @@ class Plan:
     price_cents: int
     monthly_credits: int
     account_types: tuple[AccountType, ...]  # who may buy it
-    seats: int | None = None
+    seats: int | None  # people (active users + open invitations); None = no limit
+    topup_price_cents: int  # pay-as-you-go price of one extra credit
 
 
 PLANS: dict[str, Plan] = {
     p.key: p
     for p in (
         Plan("solo_buyer_monthly", "Solo Operator", 7900, settings.plan_credits_solo,
-             (AccountType.SOLO_BUYER, AccountType.ORG_BUYER)),
+             (AccountType.SOLO_BUYER, AccountType.ORG_BUYER), seats=1,
+             topup_price_cents=settings.topup_price_cents_solo),
         Plan("enterprise_buyer_monthly", "Sourcing Team", 24900, settings.plan_credits_enterprise,
-             (AccountType.SOLO_BUYER, AccountType.ORG_BUYER), seats=5),
+             (AccountType.SOLO_BUYER, AccountType.ORG_BUYER), seats=5,
+             topup_price_cents=settings.topup_price_cents_enterprise),
         Plan("supplier_monthly", "Verified Supplier", 14900, settings.plan_credits_supplier,
-             (AccountType.SUPPLIER,)),
+             (AccountType.SUPPLIER,), seats=None, topup_price_cents=settings.topup_price_cents_supplier),
     )
 }
 

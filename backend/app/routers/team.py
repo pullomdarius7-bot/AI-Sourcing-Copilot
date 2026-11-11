@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import email as mail
 from app import security as sec
 from app.audit import record
+from app.billing import ledger, seats
 from app.config import get_settings
 from app.db import get_db
 from app.deps import Principal, require_permission
@@ -62,6 +63,13 @@ async def update_organization(
 
 
 # --- Users -------------------------------------------------------------------
+@router.get("/seats")
+async def seat_usage(
+    p: Principal = Depends(require_permission(Permission.USERS_READ)), db: AsyncSession = Depends(get_db),
+):
+    return {"used": await seats.seats_used(db, p.org_id), "limit": seats.seat_limit(p.org)}
+
+
 @router.get("/users", response_model=list[UserOut])
 async def list_users(
     p: Principal = Depends(require_permission(Permission.USERS_READ)),
@@ -117,6 +125,9 @@ async def update_user(
         if not other_admins:
             raise conflict("last_admin", "An organization must keep at least one active admin")
 
+    if new_active and not user.is_active:
+        await ledger.lock(db, p.org_id)
+        await seats.ensure_free_seat(db, p.org)
     changes: dict[str, object] = {}
     if body.full_name is not None and body.full_name.strip() != user.full_name:
         changes["full_name"] = body.full_name.strip()
@@ -164,6 +175,8 @@ async def create_invitation(
 ):
     if p.org.account_type == AccountType.SOLO_BUYER:
         raise ApiError(409, "solo_account", "Solo buyer accounts have a single member and cannot invite others")
+    await ledger.lock(db, p.org_id)  # serialize seat checks for this account
+    await seats.ensure_free_seat(db, p.org)
     email = svc.normalize_email(body.email)
     if await svc.email_in_use(db, email, p.org_id):
         raise ApiError(409, "email_unavailable", "This email address cannot be invited")

@@ -63,6 +63,8 @@ class Organization(Base):
     onboarding_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     # Analysis credits left. Changed only by app.billing.ledger, together with a credit_transactions row.
     credit_balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The part of credit_balance bought as top-ups: spent last, kept at renewal and on cancellation.
+    purchased_credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(64))

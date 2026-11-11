@@ -41,8 +41,12 @@ def ensure_can_spend(org: Organization, cost: int) -> None:
     if reason is not None:
         raise PaymentRequired("SUBSCRIPTION_REQUIRED", _REASONS[reason], org.credit_balance, reason)
     if org.credit_balance < cost:
-        raise PaymentRequired(
+        from app.billing.service import topup_status
+
+        error = PaymentRequired(
             "INSUFFICIENT_CREDITS",
             f"This needs {cost} credit{'s' if cost != 1 else ''} and the account has {org.credit_balance} left.",
             org.credit_balance, "insufficient_credits",
         )
+        error.extra["can_top_up"] = topup_status(org)[0]
+        raise error

@@ -25,16 +25,25 @@ const ACTION: Record<string, string> = {
   manifest_extraction: "Manifest extraction", deep_analysis: "Full analysis run", assistant_answer: "Assistant answer",
 };
 
+function usd(cents: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+}
+
 export default function BillingPage() {
   const { data, error, loading } = useFetch<Billing>("billing");
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [credits, setCredits] = useState(25);
 
   useEffect(() => {
-    const result = new URLSearchParams(window.location.search).get("checkout");
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("checkout");
     if (result === "success") setNotice("Thank you. Your subscription is being activated; credits appear here within a minute.");
     if (result === "cancelled") setNotice("Checkout was cancelled. Nothing was charged.");
+    const topup = params.get("topup");
+    if (topup === "success") setNotice("Payment received. Your extra credits appear here within a minute.");
+    if (topup === "cancelled") setNotice("The credit purchase was cancelled. Nothing was charged.");
   }, []);
 
   async function go(key: string, path: string, body?: unknown) {
@@ -72,7 +81,14 @@ export default function BillingPage() {
             <CardTitle className="text-3xl tabular-nums">{data.credit_balance}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            {data.ai_access ? "Unused credits do not roll over to the next period." : "AI analysis is paused for this account."}
+            {!data.ai_access
+              ? "AI analysis is paused for this account."
+              : data.purchased_credits > 0
+                ? `${data.purchased_credits} bought credit${data.purchased_credits === 1 ? "" : "s"} roll over; unused plan credits do not.`
+                : "Unused plan credits do not roll over to the next period."}
+            {data.seats.limit !== null && (
+              <span className="mt-2 block">Seats: {data.seats.used} of {data.seats.limit} used</span>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -110,6 +126,51 @@ export default function BillingPage() {
         </Card>
       </div>
 
+      {subscribed && data.topup.price_cents !== null && (
+        <section aria-labelledby="topup-heading">
+          <Card className={cn(data.topup.available && "border-primary")}>
+            <CardHeader>
+              <CardTitle id="topup-heading">Extra credits, pay as you go</CardTitle>
+              <CardDescription>
+                Out of monthly credits? Buy exactly what you need at {usd(data.topup.price_cents)} per credit. Bought
+                credits are used after your plan credits and roll over while you are subscribed.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {data.topup.available && data.can_manage ? (
+                <form
+                  className="flex flex-wrap items-end gap-3"
+                  onSubmit={(e) => { e.preventDefault(); void go("topup", "billing/create-topup-session", { credits }); }}
+                >
+                  <fieldset className="flex flex-wrap gap-2">
+                    <legend className="mb-1 text-xs text-muted-foreground">Credits</legend>
+                    {[10, 25, 50, 100].map((n) => (
+                      <Button key={n} type="button" size="sm" variant={credits === n ? "default" : "outline"} onClick={() => setCredits(n)} aria-pressed={credits === n}>{n}</Button>
+                    ))}
+                  </fieldset>
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="topup-credits" className="text-xs text-muted-foreground">Or enter an amount</label>
+                    <input id="topup-credits" type="number" min={data.topup.min_credits} max={data.topup.max_credits} value={credits}
+                      onChange={(e) => setCredits(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                      className="h-9 w-24 rounded-md border border-input bg-card px-2 text-sm" />
+                  </div>
+                  <Button type="submit" disabled={busy !== null || credits < data.topup.min_credits || credits > data.topup.max_credits}>
+                    {busy === "topup" ? "Opening checkout…" : `Buy ${credits} credits for ${usd(credits * data.topup.price_cents)}`}
+                  </Button>
+                  {(credits < data.topup.min_credits || credits > data.topup.max_credits) && (
+                    <p className="w-full text-xs text-destructive">Choose between {data.topup.min_credits} and {data.topup.max_credits} credits.</p>
+                  )}
+                </form>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {data.topup.available ? "Only an administrator can buy credits." : data.topup.reason}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       <section aria-labelledby="plans-heading" className="space-y-3">
         <h2 id="plans-heading" className="text-base font-semibold">{subscribed ? "Your plan" : "Choose a plan"}</h2>
         <div className={cn("grid gap-4", data.plans.length > 1 && "md:grid-cols-2")}>
@@ -126,7 +187,8 @@ export default function BillingPage() {
                 <CardContent className="space-y-4">
                   <ul className="space-y-2 text-sm">
                     <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />{plan.monthly_credits} credits every month</li>
-                    {plan.seats && <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />Up to {plan.seats} team seats</li>}
+                    {plan.seats !== null && <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />{plan.seats === 1 ? "1 seat" : `Up to ${plan.seats} team seats`}</li>}
+                    <li className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />Extra credits at {usd(plan.topup_price_cents)} each when you run out</li>
                   </ul>
                   {isCurrent ? (
                     <Badge variant="default">Current plan</Badge>

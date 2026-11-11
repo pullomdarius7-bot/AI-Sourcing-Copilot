@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PersonaTabs } from "@/components/landing/persona-tabs";
+import { dollars, type PublicPlan } from "@/lib/plans";
 
 const TRIAL_HREF = "/register?tier=trial";
 const SUPPLIER_HREF = "/register?role=supplier";
@@ -22,51 +23,64 @@ const PIPELINE = [
   { icon: Target, title: "Actionable Decision", text: "Buy / Pass / Max Bid Ceiling" },
 ];
 
-const PLANS = [
-  {
-    name: "Solo Operator",
-    price: "$79",
-    suffix: "/ month",
-    features: [
-      "25 Full Manifest Analyses per month",
-      "Multi-channel margin & fee calculator (eBay, Amazon, Direct)",
-      "Real-time condition grade discounting",
-      "Exportable deal sheets (PDF/CSV)",
-      "7-day free trial (includes 10 analyses)",
-    ],
-    cta: "Start 7-Day Free Trial",
-    href: TRIAL_HREF,
-    featured: true,
-  },
-  {
-    name: "Sourcing Team",
-    price: "$249",
-    suffix: "/ month",
-    features: [
-      "Unlimited manifest uploads & batch parsing",
-      "Up to 5 team seats with role-based permissions",
-      "Custom margin rules, freight cost overlays, and API export",
-      "Priority AI processing queue & dedicated account manager",
-    ],
-    cta: "Set Up Your Team",
-    href: "/register?role=org_buyer",
-    featured: false,
-  },
-  {
-    name: "Verified Supplier",
-    price: "$149",
-    suffix: "/ month + tiered lead matching",
-    features: [
-      "Unlimited wholesale inventory lot listings",
-      "Direct placement in Buyer Sourcing Marketplace",
-      "Verified buyer RFQ management dashboard",
-      "Automated catalog standardization and batch manifest cleansing",
-    ],
-    cta: "List as a Verified Supplier",
-    href: SUPPLIER_HREF,
-    featured: false,
-  },
-];
+type PlanCard = { name: string; price: string; suffix: string; features: string[]; cta: string; href: string; featured: boolean };
+
+/** Prices, credits and seats come from the backend plan catalog; only the wording lives here. */
+function planCards(plans: PublicPlan[]): PlanCard[] {
+  const by = Object.fromEntries(plans.map((p) => [p.key, p])) as Record<PublicPlan["key"], PublicPlan>;
+  const solo = by.solo_buyer_monthly;
+  const team = by.enterprise_buyer_monthly;
+  const supplier = by.supplier_monthly;
+  const topUp = (p: PublicPlan) => `Run out? Extra analyses at ${dollars(p.topup_price_cents, true)} each, pay as you go`;
+  return [
+    {
+      name: solo.name,
+      price: dollars(solo.price_cents),
+      suffix: "/ month",
+      features: [
+        `${solo.monthly_credits} Full Manifest Analyses per month`,
+        "Multi-channel margin & fee calculator (eBay, Amazon, Direct)",
+        "Real-time condition grade discounting",
+        "Exportable deal sheets (PDF/CSV)",
+        "7-day free trial (includes 10 analyses)",
+        topUp(solo),
+      ],
+      cta: "Start 7-Day Free Trial",
+      href: TRIAL_HREF,
+      featured: true,
+    },
+    {
+      name: team.name,
+      price: dollars(team.price_cents),
+      suffix: "/ month",
+      features: [
+        `${team.monthly_credits} manifest analyses per month & batch parsing`,
+        `Up to ${team.seats} team seats with role-based permissions`,
+        "Custom margin rules, freight cost overlays, and API export",
+        "Priority AI processing queue & dedicated account manager",
+        topUp(team),
+      ],
+      cta: "Set Up Your Team",
+      href: "/register?role=org_buyer",
+      featured: false,
+    },
+    {
+      name: supplier.name,
+      price: dollars(supplier.price_cents),
+      suffix: "/ month + tiered lead matching",
+      features: [
+        "Unlimited wholesale inventory lot listings",
+        "Direct placement in Buyer Sourcing Marketplace",
+        "Verified buyer RFQ management dashboard",
+        `Automated catalog standardization and batch manifest cleansing (${supplier.monthly_credits} credits a month)`,
+        topUp(supplier),
+      ],
+      cta: "List as a Verified Supplier",
+      href: SUPPLIER_HREF,
+      featured: false,
+    },
+  ];
+}
 
 const SAMPLE_LINES = [
   ["Est. resale value", "$18,420"],
@@ -123,7 +137,8 @@ function SampleDealSheet() {
   );
 }
 
-export function Landing() {
+export function Landing({ plans }: { plans: PublicPlan[] }) {
+  const cards = planCards(plans);
   return (
     <div className="bg-background">
       <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
@@ -244,7 +259,7 @@ export function Landing() {
         <Section id="pricing" className="border-y bg-card">
           <SectionHeading eyebrow="Pricing" title="A plan for how you buy or sell" />
           <div className="grid gap-5 lg:grid-cols-3">
-            {PLANS.map((plan) => (
+            {cards.map((plan) => (
               <div
                 key={plan.name}
                 className={cn("flex flex-col rounded-xl border bg-background p-6", plan.featured && "border-primary ring-1 ring-primary")}
