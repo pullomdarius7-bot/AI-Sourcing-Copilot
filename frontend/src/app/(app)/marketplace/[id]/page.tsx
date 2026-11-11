@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowLeft, Lock, MapPin, Sparkles } from "lucide-react";
+import { ArrowLeft, Download, Lock, MapPin, Sparkles } from "lucide-react";
 import { api, ApiError, errorMessage, useFetch } from "@/lib/api";
 import { CATEGORIES, CONDITIONS, LOT_TYPES, money, pct, type Analysis, type LotDetail } from "@/lib/marketplace";
 import { cn, formatDate } from "@/lib/utils";
@@ -95,6 +95,10 @@ function AnalysisView({ analysis }: { analysis: Analysis }) {
         {r.notes.map((n) => <li key={n}>{n}</li>)}
         <li>Estimates only: inspect the manifest and confirm freight before committing capital.</li>
       </ul>
+      <div className="flex flex-wrap gap-2">
+        <Button asChild size="sm" variant="outline"><a href={`/api/marketplace/analyses/${analysis.id}/deal-sheet.pdf`}><Download className="h-3.5 w-3.5" aria-hidden /> Deal sheet (PDF)</a></Button>
+        <Button asChild size="sm" variant="outline"><a href={`/api/marketplace/analyses/${analysis.id}/deal-sheet.csv`}><Download className="h-3.5 w-3.5" aria-hidden /> Deal sheet (CSV)</a></Button>
+      </div>
     </div>
   );
 }
@@ -103,8 +107,8 @@ export default function LotPage({ params }: { params: { id: string } }) {
   const me = useMe();
   const router = useRouter();
   const { data: lot, error, loading, reload } = useFetch<LotDetail>(`marketplace/lots/${params.id}`);
-  const [channel, setChannel] = useState("ebay");
-  const [margin, setMargin] = useState("35");
+  const [channel, setChannel] = useState("");
+  const [margin, setMargin] = useState("");
   const [freight, setFreight] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; upgrade?: boolean } | null>(null);
@@ -128,7 +132,11 @@ export default function LotPage({ params }: { params: { id: string } }) {
     try {
       await api(`marketplace/lots/${params.id}/analyses`, {
         method: "POST",
-        body: { channel, target_margin_pct: Number(margin) || 35, freight_cost: freight ? Number(freight) : null },
+        body: {
+          channel: channel || null,
+          target_margin_pct: margin ? Number(margin) : null,
+          freight_cost: freight ? Number(freight) : null,
+        },
       });
       await reload();
     } catch (err) {
@@ -154,13 +162,13 @@ export default function LotPage({ params }: { params: { id: string } }) {
             {lot.lot_type && <span>{LOT_TYPES[lot.lot_type]}{lot.pallet_count && lot.lot_type === "multi_pallet" ? ` · ${lot.pallet_count} pallets` : ""}</span>}
             <span>Listed {formatDate(lot.published_at)}</span>
           </p>
-          <SellerBadges seller={lot.seller} />
+          {lot.own ? <p className="text-xs text-muted-foreground">Your own manifest: private, never listed.</p> : <SellerBadges seller={lot.seller} />}
           <FreightTags liftgate={lot.liftgate_required} dock={lot.dock_high_only} pickup={lot.local_pickup} />
         </div>
         <div className="space-y-2 text-right">
           <p className="font-mono text-3xl font-semibold">{money(lot.asking_price)}</p>
           <p className="text-xs text-muted-foreground">Buy-It-Now</p>
-          {sold ? <Badge variant="neutral">Sold</Badge> : canTrade && (
+          {lot.own ? <p className="text-xs text-muted-foreground">Your cost</p> : sold ? <Badge variant="neutral">Sold</Badge> : canTrade && (
             lot.open_thread_id ? (
               <Button asChild><Link href={`/rfq/${lot.open_thread_id}`}>Open your negotiation</Link></Button>
             ) : (
@@ -192,7 +200,7 @@ export default function LotPage({ params }: { params: { id: string } }) {
           <CardTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" aria-hidden /> AI deep analysis</CardTitle>
           <CardDescription>
             An itemized net profit model: resale value per item, marketplace fees, refurbishment, unsellable units, freight and your maximum bid.
-            Costs {lot.analysis_cost} credit · you have {lot.credit_balance}.
+            {lot.analysis_cost === 0 ? "Included with this manifest's upload." : `Costs ${lot.analysis_cost} credit`} · you have {lot.credit_balance}.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -201,6 +209,7 @@ export default function LotPage({ params }: { params: { id: string } }) {
               <div className="flex flex-col gap-1">
                 <Label htmlFor="channel" className="text-xs">Sales channel</Label>
                 <Select id="channel" className="h-9 w-40" value={channel} onChange={(e) => setChannel(e.target.value)}>
+                  <option value="">Default ({{ ebay: "eBay", amazon: "Amazon", direct: "Direct" }[lot.defaults.channel] ?? lot.defaults.channel})</option>
                   <option value="ebay">eBay</option>
                   <option value="amazon">Amazon</option>
                   <option value="direct">Direct / own store</option>
@@ -208,7 +217,7 @@ export default function LotPage({ params }: { params: { id: string } }) {
               </div>
               <div className="flex flex-col gap-1">
                 <Label htmlFor="margin" className="text-xs">Target net margin %</Label>
-                <Input id="margin" className="h-9 w-28" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} />
+                <Input id="margin" className="h-9 w-28" inputMode="decimal" value={margin} onChange={(e) => setMargin(e.target.value)} placeholder={String(lot.defaults.target_margin_pct)} />
               </div>
               <div className="flex flex-col gap-1">
                 <Label htmlFor="freight" className="text-xs">Freight quote $ (optional)</Label>

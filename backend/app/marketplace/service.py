@@ -15,7 +15,7 @@ from app.ai.guardrails import OutputInvalid
 from app.ai.service import AiSubject, get_ai_service
 from app.audit import record
 from app.billing.access import access_problem, ensure_can_spend
-from app.billing.plans import DEEP_ANALYSIS, MANIFEST_EXTRACTION
+from app.billing.plans import DEEP_ANALYSIS, INCLUDED_ANALYSIS, MANIFEST_EXTRACTION
 from app.deps import Principal
 from app.errors import ApiError, bad_request, conflict, forbidden, not_found
 from app.jobs import queue
@@ -59,10 +59,16 @@ def require_buyer(p: Principal) -> None:
 
 
 # --- Upload & normalization ---------------------------------------------------------------------------
-async def upload_manifest(db: AsyncSession, p: Principal, upload: UploadFile, default_condition: str | None) -> MarketplaceLot:
+async def upload_manifest(db: AsyncSession, p: Principal, upload: UploadFile, default_condition: str | None,
+                          *, private: bool = False, analysis: dict[str, Any] | None = None) -> MarketplaceLot:
+    """Suppliers upload manifests to list them. Buyers (private=True) upload manifests from outside auctions or
+    suppliers to have them normalized and analysed; those lots are never listed."""
     from app.services.documents import upload_document
 
-    require_supplier(p)
+    if private:
+        require_buyer(p)
+    else:
+        require_supplier(p)
     if default_condition is not None and default_condition not in CONDITIONS:
         raise bad_request("invalid_condition", "Unknown condition grade")
     doc, duplicate = await upload_document(db, p, upload, purpose="manifest")
@@ -70,7 +76,8 @@ async def upload_manifest(db: AsyncSession, p: Principal, upload: UploadFile, de
         raise ApiError(415, "unsupported_manifest", "Upload the manifest as CSV, XLSX or PDF")
     lot = MarketplaceLot(
         organization_id=p.org_id, document_id=doc.id, created_by=p.user.id, source_filename=doc.filename,
-        default_condition=default_condition, ingest_status="processing",
+        default_condition=default_condition, ingest_status="processing", private=private,
+        auto_analysis=effective_params(p.org, analysis or {}) if private else None,
     )
     db.add(lot)
     await db.flush()
@@ -259,6 +266,8 @@ async def handle_normalize(db: AsyncSession, job) -> dict[str, Any]:
     lot.updated_at = _now()
     record(db, org_id=lot.organization_id, user_id=lot.created_by, action="manifest.normalized",
            meta={"lot_id": str(lot.id), "lines": len(items), "method": lot.ingest_method})
+    if lot.private and lot.auto_analysis is not None and lot.asking_price is not None:
+        await _queue_analysis(db, lot.organization_id, lot.id, lot.created_by, lot.auto_analysis)
     await db.commit()
     return {"lines": len(items), "method": lot.ingest_method}
 
@@ -435,8 +444,48 @@ async def profiles_for(db: AsyncSession, org_ids: list[uuid.UUID]) -> dict[uuid.
     return {r.organization_id: r for r in rows}
 
 
-async def listed_lot(db: AsyncSession, lot_id: uuid.UUID, *, published_only: bool = False) -> MarketplaceLot:
+async def own_private_lots(db: AsyncSession, p: Principal) -> list[tuple[MarketplaceLot, LotAnalysis | None]]:
+    require_buyer(p)
+    lots = list((await db.scalars(select(MarketplaceLot).where(
+        MarketplaceLot.organization_id == p.org_id, MarketplaceLot.private.is_(True)
+    ).order_by(MarketplaceLot.created_at.desc()).limit(200))).all())
+    latest: dict[uuid.UUID, LotAnalysis] = {}
+    if lots:
+        for a in (await db.scalars(select(LotAnalysis).where(
+                LotAnalysis.organization_id == p.org_id, LotAnalysis.lot_id.in_([lot.id for lot in lots])
+        ).order_by(LotAnalysis.created_at))).all():
+            latest[a.lot_id] = a
+    return [(lot, latest.get(lot.id)) for lot in lots]
+
+
+async def set_private_price(db: AsyncSession, p: Principal, lot_id: uuid.UUID, price: Decimal, title: str | None,
+                            pallet_count: int | None, lot_type: str | None) -> MarketplaceLot:
+    """A buyer records what an outside lot costs (the auction bid or quote) so it can be analysed."""
     lot = await db.get(MarketplaceLot, lot_id)
+    if lot is None or not lot.private or lot.organization_id != p.org_id:
+        raise not_found("Manifest not found")
+    lot.asking_price = price
+    if title and title.strip():
+        lot.title = scrub(title.strip()).text[:200]
+    if lot_type in LOT_TYPES:
+        lot.lot_type = lot_type
+    if pallet_count:
+        lot.pallet_count = pallet_count
+    if lot.ingest_status == "ready":
+        lot.est_margin_pct = val.estimate_lot(await items_of(db, lot.id), lot.asking_price).est_margin_pct
+        if lot.auto_analysis is not None and not await db.scalar(select(func.count()).select_from(LotAnalysis).where(
+                LotAnalysis.lot_id == lot.id, LotAnalysis.organization_id == p.org_id)):
+            await _queue_analysis(db, p.org_id, lot.id, p.user.id, lot.auto_analysis)
+    lot.updated_at = _now()
+    await db.commit()
+    return lot
+
+
+async def listed_lot(db: AsyncSession, lot_id: uuid.UUID, *, published_only: bool = False,
+                     viewer: uuid.UUID | None = None) -> MarketplaceLot:
+    lot = await db.get(MarketplaceLot, lot_id)
+    if lot is not None and viewer is not None and lot.private and lot.organization_id == viewer:
+        return lot
     allowed = ("published",) if published_only else ("published", "sold")
     if lot is None or lot.status not in allowed:
         raise not_found("This lot is not on the marketplace")
@@ -476,16 +525,62 @@ def validate_valuation(data: Any) -> list[dict[str, Any]]:
     return data["items"]
 
 
-async def request_analysis(db: AsyncSession, p: Principal, lot_id: uuid.UUID, params: dict[str, Any]) -> LotAnalysis:
-    require_buyer(p)
-    await listed_lot(db, lot_id, published_only=True)
-    await gateway.check(db, p.org_id, DEEP_ANALYSIS)  # 402 now, before anything is queued
-    analysis = LotAnalysis(organization_id=p.org_id, lot_id=lot_id, requested_by=p.user.id, status="queued",
-                           params=params)
+BUILT_IN_DEFAULTS = {
+    "channel": "ebay", "target_margin_pct": 35.0, "freight_per_pallet": float(val.FREIGHT_PER_PALLET),
+    "freight_truckload": float(val.FREIGHT_TRUCKLOAD), "handling_per_unit": 0.0,
+}
+RULE_KEYS = tuple(BUILT_IN_DEFAULTS)
+
+
+def analysis_defaults(org: Organization) -> dict[str, Any]:
+    """Built-in assumptions, overridden by the account's margin rules on the Sourcing Team plan."""
+    from app.billing.plans import team_features
+
+    rules = org.analysis_defaults if team_features(org) else {}
+    return {**BUILT_IN_DEFAULTS, **{k: v for k, v in (rules or {}).items() if k in RULE_KEYS and v is not None}}
+
+
+def effective_params(org: Organization, explicit: dict[str, Any]) -> dict[str, Any]:
+    return {**analysis_defaults(org), **{k: v for k, v in explicit.items() if v is not None}}
+
+
+async def analysis_action(db: AsyncSession, org_id: uuid.UUID, lot: MarketplaceLot) -> str:
+    """The first analysis of a buyer's own manifest is part of what its upload cost; later runs cost a credit."""
+    if lot.private and lot.organization_id == org_id:
+        done = await db.scalar(select(func.count()).select_from(LotAnalysis).where(
+            LotAnalysis.organization_id == org_id, LotAnalysis.lot_id == lot.id,
+            LotAnalysis.status.in_(("succeeded", "running", "queued"))))
+        if not done:
+            return INCLUDED_ANALYSIS
+    return DEEP_ANALYSIS
+
+
+async def analysable_lot(db: AsyncSession, p: Principal, lot_id: uuid.UUID) -> MarketplaceLot:
+    lot = await db.get(MarketplaceLot, lot_id)
+    if lot is not None and lot.private and lot.organization_id == p.org_id:
+        if lot.ingest_status != "ready":
+            raise conflict("not_ready", "The manifest is still being read")
+        if lot.asking_price is None:
+            raise bad_request("price_required", "Enter what the lot costs before analysing it")
+        return lot
+    return await listed_lot(db, lot_id, published_only=True)
+
+
+async def _queue_analysis(db: AsyncSession, org_id: uuid.UUID, lot_id: uuid.UUID, user_id: uuid.UUID | None,
+                          params: dict[str, Any]) -> LotAnalysis:
+    analysis = LotAnalysis(organization_id=org_id, lot_id=lot_id, requested_by=user_id, status="queued", params=params)
     db.add(analysis)
     await db.flush()
-    await queue.enqueue(db, org_id=p.org_id, kind=ANALYZE_LOT, payload={"analysis_id": str(analysis.id)},
+    await queue.enqueue(db, org_id=org_id, kind=ANALYZE_LOT, payload={"analysis_id": str(analysis.id)},
                         dedupe_key=f"{ANALYZE_LOT}:{analysis.id}", max_attempts=3)
+    return analysis
+
+
+async def request_analysis(db: AsyncSession, p: Principal, lot_id: uuid.UUID, params: dict[str, Any]) -> LotAnalysis:
+    require_buyer(p)
+    lot = await analysable_lot(db, p, lot_id)
+    await gateway.check(db, p.org_id, await analysis_action(db, p.org_id, lot))  # 402 now, before anything is queued
+    analysis = await _queue_analysis(db, p.org_id, lot_id, p.user.id, effective_params(p.org, params))
     record(db, org_id=p.org_id, user_id=p.user.id, action="marketplace.analysis_requested", ip=p.ip,
            meta={"lot_id": str(lot_id), "analysis_id": str(analysis.id)})
     await db.refresh(analysis)
@@ -500,12 +595,20 @@ async def handle_analysis(db: AsyncSession, job) -> dict[str, Any]:
     if analysis.status == "succeeded":
         return {"skipped": "already done"}
     lot = await db.get(MarketplaceLot, analysis.lot_id)
-    if lot is None or lot.status != "published":
+    own = lot is not None and lot.private and lot.organization_id == analysis.organization_id
+    if lot is None or not (lot.status == "published" or own):
         analysis.status, analysis.error, analysis.completed_at = "failed", "The lot is no longer listed", _now()
         await db.commit()
         return {"failed": "not listed"}
+    analysis.status = "running"  # counts as the lot's analysis while this one is in progress
+    action = DEEP_ANALYSIS
+    if own:
+        earlier = await db.scalar(select(func.count()).select_from(LotAnalysis).where(
+            LotAnalysis.organization_id == analysis.organization_id, LotAnalysis.lot_id == lot.id,
+            LotAnalysis.id != analysis.id, LotAnalysis.status.in_(("succeeded", "running"))))
+        action = INCLUDED_ANALYSIS if not earlier else DEEP_ANALYSIS
     try:
-        permit = await gateway.acquire(db, analysis.organization_id, DEEP_ANALYSIS, analysis.id,
+        permit = await gateway.acquire(db, analysis.organization_id, action, analysis.id,
                                        user_id=analysis.requested_by)
     except gateway.PaymentRequired as exc:
         analysis.status, analysis.error, analysis.completed_at = "failed", exc.message, _now()
@@ -518,11 +621,14 @@ async def handle_analysis(db: AsyncSession, job) -> dict[str, Any]:
         for i in await items_of(db, lot.id)
     ]
     ai_values, notes = await _model_values(db, analysis, lot, items, permit)
-    params = analysis.params
-    freight = Decimal(str(params["freight_cost"])) if params.get("freight_cost") is not None else val.default_freight(lot.lot_type, lot.pallet_count)
+    params = {**BUILT_IN_DEFAULTS, **analysis.params}
+    freight = Decimal(str(params["freight_cost"])) if params.get("freight_cost") is not None else val.default_freight(
+        lot.lot_type, lot.pallet_count, per_pallet=Decimal(str(params["freight_per_pallet"])),
+        truckload=Decimal(str(params["freight_truckload"])))
     result = val.deep_analysis(
-        items, asking_price=lot.asking_price or Decimal("0"), channel=params.get("channel", "ebay"),
-        target_margin_pct=Decimal(str(params.get("target_margin_pct", 35))), freight=freight, ai_resale=ai_values,
+        items, asking_price=lot.asking_price or Decimal("0"), channel=params["channel"],
+        target_margin_pct=Decimal(str(params["target_margin_pct"])), freight=freight, ai_resale=ai_values,
+        handling_per_unit=Decimal(str(params["handling_per_unit"])),
     )
     result["notes"] = notes
     result["lot"] = {"title": lot.title, "asking_price": float(lot.asking_price or 0), "lot_type": lot.lot_type}

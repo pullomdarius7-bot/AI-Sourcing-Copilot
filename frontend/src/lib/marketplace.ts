@@ -110,6 +110,7 @@ export interface AnalysisItem {
   revenue: number;
   fees: number;
   refurbishment: number;
+  handling?: number;
   freight: number;
   cost: number;
   net_profit: number;
@@ -119,14 +120,14 @@ export interface Analysis {
   id: string;
   lot_id: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  params: { channel: string; target_margin_pct: number; freight_cost: number | null };
+  params: { channel: string; target_margin_pct: number; freight_cost?: number | null; handling_per_unit?: number };
   method: string | null;
   error: string | null;
   created_at: string;
   completed_at: string | null;
   result: null | {
     items: AnalysisItem[];
-    totals: { units: number; msrp: number; revenue: number; fees: number; refurbishment: number; freight: number; cost: number; net_profit: number; roi_pct: number | null; net_margin_pct: number | null };
+    totals: { units: number; msrp: number; revenue: number; fees: number; refurbishment: number; handling?: number; freight: number; cost: number; net_profit: number; roi_pct: number | null; net_margin_pct: number | null };
     max_bid: number;
     decision: "buy" | "negotiate" | "pass";
     notes: string[];
@@ -138,6 +139,8 @@ export interface LotDetail extends LotCard {
   items: LotItem[];
   analyses: Analysis[];
   open_thread_id: string | null;
+  own: boolean;
+  defaults: { channel: string; target_margin_pct: number; freight_per_pallet: number; freight_truckload: number; handling_per_unit: number };
   credit_balance: number;
   ai_access: boolean;
   analysis_cost: number;
@@ -266,3 +269,106 @@ export function tomorrowPlus(days: number) {
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+export interface SourcingCandidate {
+  id: string;
+  kind: "marketplace" | "web";
+  lot_id: string | null;
+  company_name: string;
+  website: string | null;
+  domain: string | null;
+  business_type: string | null;
+  location: string | null;
+  summary: string | null;
+  categories: string[];
+  products: { name: string; quote: string; url: string }[];
+  evidence: { quote: string; url: string }[];
+  moq: string | null;
+  price_notes: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  contact_url: string | null;
+  relevance: number;
+  method: string;
+  status: "new" | "added" | "dismissed";
+  invite_status: string | null;
+  supplier_id: string | null;
+  flags: string[];
+}
+
+export interface SourcingRequest {
+  id: string;
+  title: string;
+  description: string | null;
+  category: string | null;
+  condition: string | null;
+  quantity: number | null;
+  target_unit_price: string | null;
+  region: string | null;
+  needed_by: string | null;
+  status: "open" | "closed";
+  open_to_suppliers: boolean;
+  search_web: "auto" | "always" | "never";
+  web_status: "none" | "queued" | "running" | "done" | "skipped" | "failed";
+  web_note: string | null;
+  marketplace_matches: number;
+  web_matches: number;
+  invites_sent: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface SourcingRequestDetail extends SourcingRequest {
+  candidates: SourcingCandidate[];
+  proposals: ThreadSummary[];
+  web_search_available: boolean;
+  web_search_cost: number;
+  warnings: string[];
+}
+
+export interface Lead {
+  id: string;
+  title: string;
+  description: string | null;
+  category: string | null;
+  condition: string | null;
+  quantity: number | null;
+  target_unit_price: string | null;
+  region: string | null;
+  needed_by: string | null;
+  created_at: string;
+  match: number;
+  buyer: Seller;
+  my_thread_id: string | null;
+}
+
+export interface PrivateLot {
+  id: string;
+  title: string;
+  source_filename: string;
+  ingest_status: "processing" | "ready" | "failed";
+  ingest_error: string | null;
+  asking_price: string | null;
+  item_count: number;
+  total_units: number;
+  total_msrp: string | null;
+  est_margin_pct: string | null;
+  condition_mix: Record<string, number>;
+  created_at: string;
+  analysis: Analysis | null;
+}
+
+export const INVITE_STATUS: Record<string, string> = {
+  queued: "Invited to quote",
+  invited: "Invited recently",
+  held: "Invitation pending",
+  member: "Already on the platform",
+  suppressed: "Opted out of emails",
+  joined: "Joined the platform",
+  no_contact: "No published email",
+};
+
+export const BUSINESS_TYPES: Record<string, string> = {
+  manufacturer: "Manufacturer", wholesaler: "Wholesaler", distributor: "Distributor", liquidator: "Liquidator",
+  retailer: "Retailer", marketplace: "Marketplace", other: "Business",
+};

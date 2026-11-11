@@ -71,19 +71,19 @@ async def test_trial_accounts_cannot_buy_credits(client, stripe_fake, admin_engi
 async def test_subscribers_can_buy_once_they_are_out_of_credits(client, stripe_fake, admin_engine):
     admin = await register_admin(client)
     await subscribe(client, admin)  # 25 credits
-    assert (await billing(client, admin))["topup"]["available"] is False
+    assert (await billing(client, admin))["topup"]["available"] is False  # available at 5 credits or fewer
     res = await client.post("/billing/create-topup-session", json={"credits": 20}, headers=admin.headers)
     assert res.status_code == 409
 
     await set_credits(admin_engine, admin.org_id, 2)
     body = (await billing(client, admin))["topup"]
-    assert (body["available"], body["price_cents"]) == (True, 350)
+    assert (body["available"], body["price_cents"]) == (True, 299)
     res = await client.post("/billing/create-topup-session", json={"credits": 20}, headers=admin.headers)
     assert res.status_code == 200 and res.json()["url"] == "https://checkout.stripe.test/topup"
     session = stripe_fake.topups[0]
-    assert (session["credits"], session["unit_amount_cents"], session["customer"]) == (20, 350, "cus_1")
+    assert (session["credits"], session["unit_amount_cents"], session["customer"]) == (20, 299, "cus_1")
     assert session["metadata"] == {"organization_id": admin.org_id, "user_id": admin.user_id, "kind": "credit_topup",
-                                   "credits": "20", "unit_amount": "350"}
+                                   "credits": "20", "unit_amount": "299"}
 
 
 @pytest.mark.parametrize("credits", [0, 4, 501])
@@ -100,7 +100,7 @@ async def test_the_team_plan_pays_less_per_extra_credit(client, stripe_fake, adm
     await subscribe(client, admin, plan="enterprise_buyer_monthly")
     await set_credits(admin_engine, admin.org_id, 0)
     await client.post("/billing/create-topup-session", json={"credits": 100}, headers=admin.headers)
-    assert stripe_fake.topups[0]["unit_amount_cents"] == 125
+    assert stripe_fake.topups[0]["unit_amount_cents"] == 99
 
 
 async def test_out_of_credits_402_says_a_top_up_is_possible(client, worker, admin_engine):
@@ -237,7 +237,7 @@ async def test_the_public_price_list_needs_no_sign_in(client):
     by_key = {p["key"]: p for p in res.json()}
     assert by_key["enterprise_buyer_monthly"] == {
         "key": "enterprise_buyer_monthly", "name": "Sourcing Team", "price_cents": 24900, "monthly_credits": 250,
-        "seats": 5, "topup_price_cents": 125, "account_types": ["solo_buyer", "org_buyer"],
+        "seats": 5, "topup_price_cents": 99, "account_types": ["solo_buyer", "org_buyer"],
     }
 
 

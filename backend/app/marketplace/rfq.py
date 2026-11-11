@@ -418,3 +418,47 @@ async def list_threads(db: AsyncSession, p: Principal) -> list[RfqThread]:
     return list((await db.scalars(select(RfqThread).where(
         (RfqThread.buyer_org_id == p.org_id) | (RfqThread.supplier_org_id == p.org_id)
     ).order_by(RfqThread.last_event_at.desc()).limit(200))).all())
+
+
+async def create_proposal(db: AsyncSession, p: Principal, request_id: uuid.UUID, lot_id: uuid.UUID, *, price: Decimal,
+                          shipping_terms: str, target_close_date: date,
+                          custom_terms: str | None) -> tuple[RfqThread, list[str], list[Notice]]:
+    """A supplier answers a buyer's sourcing request by offering one of its published lots. Opens a masked
+    negotiation in which the supplier made the first offer."""
+    from app.sourcing.service import lead
+
+    request = await lead(db, p, request_id)
+    lot = await db.get(MarketplaceLot, lot_id)
+    if lot is None or lot.organization_id != p.org_id:
+        raise not_found("Lot not found")
+    if lot.status != "published":
+        raise conflict("lot_not_published", "Publish the lot before proposing it to a buyer")
+    _validate_offer(price, shipping_terms, target_close_date)
+    existing = await db.scalar(select(RfqThread.id).where(
+        RfqThread.lot_id == lot.id, RfqThread.buyer_org_id == request.organization_id, RfqThread.status == "open"))
+    if existing is not None:
+        raise ApiError(409, "offer_open", "There is already an open negotiation with this buyer on this lot",
+                       extra={"thread_id": str(existing)})
+    cleaned = scrub(custom_terms.strip(), names=(p.org.name,)) if custom_terms and custom_terms.strip() else None
+    seller = await profiles.refresh(db, p.org_id, restore_org=p.org_id)
+    thread = RfqThread(
+        lot_id=lot.id, lot_title=lot.title, buyer_org_id=request.organization_id, supplier_org_id=p.org_id,
+        created_by=p.user.id, status="open", offer_by="supplier", offer_price=price, shipping_terms=shipping_terms,
+        target_close_date=target_close_date, custom_terms=cleaned.text if cleaned else None, request_id=request.id,
+    )
+    db.add(thread)
+    await db.flush()
+    flags = cleaned.flags if cleaned else []
+    event = await _append(db, thread, "supplier", p.user.id, "offer",
+                          offer=_offer(price, shipping_terms, target_close_date, thread.custom_terms), flags=flags,
+                          body=f"Proposed for your request \"{request.title}\".")
+    if cleaned:
+        await _moderate(db, p, thread, event, custom_terms or "", flags)
+    notices = await _notify(db, thread, "buyer", f"A supplier answered your request: {request.title}", [
+        f"{_describe(seller)} proposes \"{lot.title}\" for {_money_text(price)}.",
+        f"Freight: {SHIPPING[shipping_terms]}. Target close date: {target_close_date.isoformat()}.",
+    ], p.org_id)
+    record(db, org_id=p.org_id, user_id=p.user.id, action="rfq.proposal_submitted", ip=p.ip,
+           meta={"thread_id": str(thread.id), "request_id": str(request.id), "lot_id": str(lot.id), "price": str(price)})
+    await db.commit()
+    return thread, (cleaned.warnings if cleaned else []), notices

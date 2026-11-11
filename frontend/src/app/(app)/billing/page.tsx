@@ -217,6 +217,24 @@ export default function BillingPage() {
         </div>
       </section>
 
+      {data.support.email && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{data.support.priority ? "Priority support" : "Support"}</CardTitle>
+            <CardDescription>
+              {data.support.priority
+                ? "Sourcing Team requests go to the front of the queue."
+                : "Questions about billing, credits or your account."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline" size="sm">
+              <a href={`mailto:${data.support.email}?subject=${encodeURIComponent(`${data.support.priority ? "[Priority] " : ""}Support request`)}`}>Email {data.support.email}</a>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       <section aria-labelledby="activity-heading" className="space-y-3">
         <h2 id="activity-heading" className="text-base font-semibold">Credit activity</h2>
         <Card>

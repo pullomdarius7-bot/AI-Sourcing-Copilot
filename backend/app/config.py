@@ -54,14 +54,40 @@ class Settings(BaseSettings):
     credit_cost_assistant_answer: int = 1
     # Pay-as-you-go top-ups for subscribers who run out: price per credit by plan, pack size limits, and how low
     # the balance must be before a top-up can be bought.
-    topup_price_cents_solo: int = 350
-    topup_price_cents_enterprise: int = 125
-    topup_price_cents_supplier: int = 175
+    # Priced at the plan's own per-credit rate (79/25, 249/250, 149/100), rounded down: running out never costs more.
+    topup_price_cents_solo: int = 299
+    topup_price_cents_enterprise: int = 99
+    topup_price_cents_supplier: int = 149
     topup_min_credits: int = 5
     topup_max_credits: int = 500
-    topup_available_at_or_below: int = 2
+    topup_available_at_or_below: int = 5
     # People (active users plus open invitations) an organization buyer account may have before it subscribes.
     trial_seats: int = 5
+    # Where customers write for help; Sourcing Team requests are marked as priority.
+    support_email: str = ""
+
+    # --- AI sourcing engine: web supplier discovery ---
+    # searxng (self-hosted, SEARXNG_URL) | brave (Brave Search API, BRAVE_API_KEY) | empty = web search off
+    search_provider: str = ""
+    searxng_url: str = ""
+    brave_api_key: str = ""
+    credit_cost_web_sourcing: int = 2
+    web_sourcing_max_sites: int = 8
+    web_sourcing_pages_per_site: int = 3
+    web_fetch_timeout_seconds: float = 10.0
+    web_fetch_max_bytes: int = 1_500_000
+    web_allow_private_hosts: bool = False  # tests only: never point the crawler at internal addresses in production
+    crawler_user_agent: str = "SourcingCopilotBot/1.0"
+
+    # --- Supplier invites sent to businesses the sourcing engine finds ---
+    # auto = send when every safeguard passes | review = record, send nothing | off = do not record
+    supplier_invites: str = "auto"
+    invite_cooldown_days: int = 90
+    invite_daily_limit: int = 200
+    invites_per_request: int = 10
+    # Required by anti-spam law (CAN-SPAM): the sender's postal address. Invites are held until it is set.
+    invite_sender_postal_address: str = ""
+    platform_name: str = "Sourcing Copilot"
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 30

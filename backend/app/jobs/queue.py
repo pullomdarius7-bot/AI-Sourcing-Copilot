@@ -25,6 +25,9 @@ def backoff_seconds(attempts: int) -> float:
     return delay * random.uniform(0.8, 1.2) if delay else 0.0
 
 
+PRIORITY_TEAM = 10
+
+
 async def enqueue(
     db: AsyncSession,
     *,
@@ -35,8 +38,14 @@ async def enqueue(
     max_attempts: int | None = None,
     delay_seconds: float = 0,
 ) -> Job | None:
-    """Add a job inside the caller's transaction (transactional outbox). None if an identical job is active."""
+    """Add a job inside the caller's transaction (transactional outbox). None if an identical job is active.
+    Sourcing Team accounts get priority processing: their jobs are claimed before everyone else's."""
+    from app.billing.plans import TEAM_PLAN
+    from app.models import Organization
+
+    plan = await db.scalar(select(Organization.plan).where(Organization.id == org_id))
     job = Job(
+        priority=PRIORITY_TEAM if plan == TEAM_PLAN else 0,
         organization_id=org_id,
         kind=kind,
         payload=payload,
@@ -59,7 +68,7 @@ async def claim(db: AsyncSession, worker_id: str) -> Job | None:
     job = await db.scalar(
         select(Job)
         .where(Job.status == "queued", Job.run_at <= now)
-        .order_by(Job.run_at)
+        .order_by(Job.priority.desc(), Job.run_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )

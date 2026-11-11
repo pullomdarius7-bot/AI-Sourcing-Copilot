@@ -1,0 +1,12 @@
+# SearXNG for the AI sourcing engine. Only reachable inside the compose network.
+use_default_settings: true
+server:
+  # Overridden by the SEARXNG_SECRET environment variable.
+  secret_key: "change-me"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json

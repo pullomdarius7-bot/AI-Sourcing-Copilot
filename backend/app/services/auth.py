@@ -107,7 +107,7 @@ async def _redeem_email_token(db: AsyncSession, raw: str, purpose: str) -> tuple
 # --- Registration & verification --------------------------------------------
 async def register(
     db: AsyncSession, *, organization_name: str | None, full_name: str, email: str, password: str,
-    client: ClientInfo, account_type: str = "solo_buyer",
+    client: ClientInfo, account_type: str = "solo_buyer", invite_token: str | None = None,
 ) -> tuple[User, str | None]:
     await set_system(db)
     email = normalize_email(email)
@@ -130,6 +130,11 @@ async def register(
     raw = None
     if settings.require_email_verification:
         raw = await create_email_token(db, user, VERIFY, timedelta(hours=settings.verify_token_hours))
+    if invite_token and account_type == "supplier":
+        from app.sourcing import invites
+
+        if await invites.mark_joined(db, invite_token, org.id):
+            record(db, org_id=org.id, user_id=user.id, action="supplier_invite.accepted", ip=client.ip)
     record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip,
            meta={"account_type": account_type})
     await db.refresh(user)

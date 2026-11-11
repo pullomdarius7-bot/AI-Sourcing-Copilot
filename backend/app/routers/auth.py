@@ -57,6 +57,7 @@ async def register(
         db,
         organization_name=body.organization_name,
         account_type=body.account_type.value,
+        invite_token=body.invite_token,
         full_name=body.full_name,
         email=body.email,
         password=body.password,

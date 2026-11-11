@@ -275,14 +275,34 @@ async def dead_send_package(db: AsyncSession, job: Job, error: str) -> None:
     await db.commit()
 
 
+async def _sourcing_search(db: AsyncSession, job: Job) -> dict[str, Any]:
+    from app.sourcing.service import handle_web_search
+
+    return await handle_web_search(db, job)
+
+
+async def _sourcing_search_dead(db: AsyncSession, job: Job, error: str) -> None:
+    from app.sourcing.service import dead_web_search
+
+    await dead_web_search(db, job, error)
+
+
+async def _sourcing_invite(db: AsyncSession, job: Job) -> dict[str, Any]:
+    from app.sourcing.invites import handle_send
+
+    return await handle_send(db, job)
+
+
 Handler = Callable[[AsyncSession, Job], Awaitable[dict[str, Any] | None]]
 HANDLERS: dict[str, Handler] = {
     SCAN: handle_scan, EXTRACT: handle_extract, ANALYZE: handle_analyze, REQUIREMENTS: handle_requirements,
     SEND_PACKAGE: handle_send_package, marketplace.NORMALIZE: marketplace.handle_normalize,
     marketplace.ANALYZE_LOT: marketplace.handle_analysis,
+    "sourcing.web_search": _sourcing_search, "sourcing.invite": _sourcing_invite,
 }
 ON_DEAD: dict[str, Callable[[AsyncSession, Job, str], Awaitable[None]]] = {
     SCAN: dead_pipeline_step, EXTRACT: dead_pipeline_step, ANALYZE: dead_analyze, REQUIREMENTS: dead_requirements,
     SEND_PACKAGE: dead_send_package, marketplace.NORMALIZE: marketplace.dead_normalize,
     marketplace.ANALYZE_LOT: marketplace.dead_analysis,
+    "sourcing.web_search": _sourcing_search_dead,
 }

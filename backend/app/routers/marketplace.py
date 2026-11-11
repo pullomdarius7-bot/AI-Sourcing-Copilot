@@ -1,16 +1,20 @@
 """Supplier listings, the buyer marketplace and masked RFQ negotiations."""
+import re
 import uuid
-from typing import Any
+from decimal import Decimal
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import email as mail
+from app.billing.plans import cost_of
 from app.db import get_db
 from app.deps import Principal, require_permission
-from app.errors import not_found
-from app.marketplace import profiles, rfq
+from app.errors import bad_request, conflict, forbidden, not_found
+from app.marketplace import dealsheet, profiles, rfq
 from app.marketplace import schemas as ms
 from app.marketplace import service as svc
 from app.marketplace.catalog import REGIONS, zip3
@@ -173,7 +177,8 @@ def analysis_out(a: LotAnalysis) -> dict[str, Any]:
 @router.get("/marketplace/lots/{lot_id}", response_model=ms.LotDetailOut)
 async def marketplace_lot(lot_id: uuid.UUID, p: Principal = Depends(READ), db: AsyncSession = Depends(get_db)):
     svc.require_buyer(p)
-    lot = await svc.listed_lot(db, lot_id)
+    lot = await svc.listed_lot(db, lot_id, viewer=p.org_id)
+    own = lot.private and lot.organization_id == p.org_id
     sellers = await svc.profiles_for(db, [lot.organization_id])
     analyses = (await db.scalars(select(LotAnalysis).where(
         LotAnalysis.organization_id == p.org_id, LotAnalysis.lot_id == lot.id
@@ -184,8 +189,10 @@ async def marketplace_lot(lot_id: uuid.UUID, p: Principal = Depends(READ), db: A
     return {
         **card(lot, sellers.get(lot.organization_id)),
         "items": [item(i) for i in await svc.items_of(db, lot.id)],
-        "analyses": [analysis_out(a) for a in analyses], "open_thread_id": open_thread,
-        "credit_balance": p.org.credit_balance, "ai_access": svc.access_summary(p)["ai_access"], "analysis_cost": 1,
+        "analyses": [analysis_out(a) for a in analyses], "open_thread_id": open_thread, "own": own,
+        "defaults": svc.analysis_defaults(p.org), "credit_balance": p.org.credit_balance,
+        "ai_access": svc.access_summary(p)["ai_access"],
+        "analysis_cost": cost_of(await svc.analysis_action(db, p.org_id, lot)),
     }
 
 
@@ -195,12 +202,117 @@ async def run_analysis(lot_id: uuid.UUID, body: ms.AnalysisIn, p: Principal = De
     return analysis_out(await svc.request_analysis(db, p, lot_id, body.model_dump()))
 
 
-@router.get("/marketplace/analyses/{analysis_id}", response_model=ms.AnalysisOut)
-async def get_analysis(analysis_id: uuid.UUID, p: Principal = Depends(READ), db: AsyncSession = Depends(get_db)):
+async def _own_analysis(db: AsyncSession, p: Principal, analysis_id: uuid.UUID) -> LotAnalysis:
     analysis = await db.get(LotAnalysis, analysis_id)
     if analysis is None or analysis.organization_id != p.org_id:
         raise not_found("Analysis not found")
-    return analysis_out(analysis)
+    return analysis
+
+
+@router.get("/marketplace/analyses/{analysis_id}/deal-sheet.{fmt}")
+async def deal_sheet(analysis_id: uuid.UUID, fmt: str, p: Principal = Depends(READ), db: AsyncSession = Depends(get_db)):
+    """The analysis as a downloadable deal sheet (csv or pdf)."""
+    analysis = await _own_analysis(db, p, analysis_id)
+    if analysis.status != "succeeded" or not analysis.result:
+        raise conflict("not_ready", "The analysis has not finished")
+    title = (analysis.result.get("lot") or {}).get("title") or "Lot"
+    safe = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-")[:60] or "lot"
+    if fmt == "csv":
+        body, media = dealsheet.to_csv(analysis.result, title), "text/csv; charset=utf-8"
+    elif fmt == "pdf":
+        body, media = dealsheet.to_pdf(analysis.result, title, analysis.completed_at or analysis.created_at), "application/pdf"
+    else:
+        raise not_found("Unknown format")
+    return Response(body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="deal-sheet-{safe}.{fmt}"'})
+
+
+@router.get("/marketplace/analyses/{analysis_id}", response_model=ms.AnalysisOut)
+async def get_analysis(analysis_id: uuid.UUID, p: Principal = Depends(READ), db: AsyncSession = Depends(get_db)):
+    return analysis_out(await _own_analysis(db, p, analysis_id))
+
+
+# --- Buyer manifests (outside auctions and suppliers): normalized and analysed privately ------------------------
+class PrivateLotIn(BaseModel):
+    asking_price: Decimal = Field(gt=0, le=Decimal("100000000"), decimal_places=2)
+    title: str | None = Field(default=None, max_length=200)
+    lot_type: ms.LotType | None = None
+    pallet_count: int | None = Field(default=None, ge=1, le=60)
+
+
+def private_lot(lot: MarketplaceLot, analysis: LotAnalysis | None) -> dict[str, Any]:
+    status, error = svc.effective_ingest(lot, None)
+    return {
+        "id": lot.id, "title": lot.title, "source_filename": lot.source_filename, "ingest_status": status,
+        "ingest_error": error, "asking_price": lot.asking_price, "item_count": lot.item_count,
+        "total_units": lot.total_units, "total_msrp": lot.total_msrp, "est_margin_pct": lot.est_margin_pct,
+        "condition_mix": lot.condition_mix, "created_at": lot.created_at,
+        "analysis": analysis_out(analysis) if analysis else None,
+    }
+
+
+@router.post("/buyer/manifests", status_code=201)
+async def upload_buyer_manifests(
+    files: list[UploadFile] = File(...), asking_price: Decimal | None = Form(default=None, gt=0),
+    default_condition: ms.Condition | None = Form(default=None), p: Principal = Depends(TRADE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch upload: every file becomes a private lot that is normalized and then analysed automatically
+    (as soon as its price is known) with the account's margin rules."""
+    if not 1 <= len(files) <= 20:
+        raise bad_request("too_many_files", "Upload between 1 and 20 manifests at a time")
+    out = []
+    for upload in files:
+        lot = await svc.upload_manifest(db, p, upload, default_condition, private=True)
+        if asking_price is not None and len(files) == 1:
+            lot.asking_price = asking_price
+            await db.commit()
+        out.append(private_lot(lot, None))
+    return out
+
+
+@router.get("/buyer/manifests")
+async def list_buyer_manifests(p: Principal = Depends(READ), db: AsyncSession = Depends(get_db)):
+    return [private_lot(lot, analysis) for lot, analysis in await svc.own_private_lots(db, p)]
+
+
+@router.patch("/buyer/manifests/{lot_id}")
+async def price_buyer_manifest(lot_id: uuid.UUID, body: PrivateLotIn, p: Principal = Depends(TRADE),
+                               db: AsyncSession = Depends(get_db)):
+    lot = await svc.set_private_price(db, p, lot_id, body.asking_price, body.title, body.pallet_count, body.lot_type)
+    rows = {lt.id: a for lt, a in await svc.own_private_lots(db, p)}
+    return private_lot(lot, rows.get(lot.id))
+
+
+# --- Margin rules & freight overlays (Sourcing Team) ---------------------------------------------------------------
+class RulesIn(BaseModel):
+    channel: Literal["ebay", "amazon", "direct"] = "ebay"
+    target_margin_pct: float = Field(ge=0, le=90)
+    freight_per_pallet: float = Field(ge=0, le=100_000)
+    freight_truckload: float = Field(ge=0, le=1_000_000)
+    handling_per_unit: float = Field(ge=0, le=10_000)
+
+
+@router.get("/analysis-rules")
+async def get_rules(p: Principal = Depends(READ)):
+    from app.billing.plans import team_features
+
+    return {"available": team_features(p.org), "rules": svc.analysis_defaults(p.org),
+            "built_in": svc.BUILT_IN_DEFAULTS}
+
+
+@router.put("/analysis-rules")
+async def put_rules(body: RulesIn, p: Principal = Depends(require_permission(Permission.REFERENCE_MANAGE)),
+                    db: AsyncSession = Depends(get_db)):
+    from app.audit import record
+    from app.billing.plans import team_features
+
+    if not team_features(p.org):
+        raise forbidden("Margin rules and freight overlays are part of the Sourcing Team plan", "team_plan_required")
+    p.org.analysis_defaults = body.model_dump()
+    record(db, org_id=p.org_id, user_id=p.user.id, action="analysis_rules.updated", ip=p.ip, meta=body.model_dump())
+    await db.commit()
+    return {"available": True, "rules": svc.analysis_defaults(p.org), "built_in": svc.BUILT_IN_DEFAULTS}
 
 
 @router.post("/marketplace/lots/{lot_id}/offers", response_model=ms.ThreadOut, status_code=201)

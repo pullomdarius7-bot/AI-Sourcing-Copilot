@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Building2, ClipboardCheck, CreditCard, MessagesSquare, PackageOpen, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { Activity, Building2, Calculator, ClipboardCheck, CreditCard, Inbox, MessagesSquare, PackageOpen, Radar, SlidersHorizontal, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -15,8 +15,11 @@ import { MeProvider } from "@/components/me-context";
 type Side = "buyer" | "supplier";
 const NAV: { href: string; label: string; icon: typeof LayoutDashboard; permission: string | null; side?: Side }[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: null },
+  { href: "/sourcing", label: "AI Sourcing", icon: Radar, permission: "marketplace:read", side: "buyer" },
   { href: "/marketplace", label: "Marketplace", icon: Store, permission: "marketplace:read", side: "buyer" },
+  { href: "/deals", label: "Deal analyzer", icon: Calculator, permission: "marketplace:read", side: "buyer" },
   { href: "/supplier/manifests", label: "Manifests & lots", icon: PackageOpen, permission: "marketplace:read", side: "supplier" },
+  { href: "/supplier/requests", label: "Buyer requests", icon: Inbox, permission: "marketplace:read", side: "supplier" },
   { href: "/messages", label: "Offers & messages", icon: MessagesSquare, permission: "marketplace:read" },
   { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use", side: "buyer" },
   { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read", side: "buyer" },
@@ -27,6 +30,7 @@ const NAV: { href: string; label: string; icon: typeof LayoutDashboard; permissi
   { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read", side: "buyer" },
   { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read", side: "buyer" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
+  { href: "/team-tools", label: "Team tools", icon: SlidersHorizontal, permission: "marketplace:trade", side: "buyer" },
   { href: "/billing", label: "Billing", icon: CreditCard, permission: null },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },

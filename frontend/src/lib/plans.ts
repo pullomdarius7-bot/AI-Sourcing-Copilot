@@ -14,9 +14,9 @@ export interface PublicPlan {
  * drifts from the catalog.
  */
 export const FALLBACK_PLANS: PublicPlan[] = /* plans-json */ [
-  {"key": "solo_buyer_monthly", "name": "Solo Operator", "price_cents": 7900, "monthly_credits": 25, "seats": 1, "topup_price_cents": 350, "account_types": ["solo_buyer", "org_buyer"]},
-  {"key": "enterprise_buyer_monthly", "name": "Sourcing Team", "price_cents": 24900, "monthly_credits": 250, "seats": 5, "topup_price_cents": 125, "account_types": ["solo_buyer", "org_buyer"]},
-  {"key": "supplier_monthly", "name": "Verified Supplier", "price_cents": 14900, "monthly_credits": 100, "seats": null, "topup_price_cents": 175, "account_types": ["supplier"]}
+  {"key": "solo_buyer_monthly", "name": "Solo Operator", "price_cents": 7900, "monthly_credits": 25, "seats": 1, "topup_price_cents": 299, "account_types": ["solo_buyer", "org_buyer"]},
+  {"key": "enterprise_buyer_monthly", "name": "Sourcing Team", "price_cents": 24900, "monthly_credits": 250, "seats": 5, "topup_price_cents": 99, "account_types": ["solo_buyer", "org_buyer"]},
+  {"key": "supplier_monthly", "name": "Verified Supplier", "price_cents": 14900, "monthly_credits": 100, "seats": null, "topup_price_cents": 149, "account_types": ["supplier"]}
 ] /* end-plans-json */;
 
 export function dollars(cents: number, exact = false) {

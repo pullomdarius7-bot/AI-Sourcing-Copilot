@@ -30,10 +30,20 @@ PLANS: dict[str, Plan] = {
              topup_price_cents=settings.topup_price_cents_enterprise),
         Plan("supplier_monthly", "Verified Supplier", 14900, settings.plan_credits_supplier,
              (AccountType.SUPPLIER,), seats=None, topup_price_cents=settings.topup_price_cents_supplier),
+        # Supplier seats are unlimited on purpose: more people answering buyers means faster replies, and a seat
+        # costs nothing to run.
     )
 }
 
 TEAM_PLAN = "enterprise_buyer_monthly"
+
+
+def team_features(org) -> bool:
+    """Sourcing Team features (margin rules, freight overlays, export API, priority processing): on the team plan,
+    and for team accounts during their free trial so they can evaluate them."""
+    if org.plan == TEAM_PLAN and org.subscription_status in ("trialing", "active", "past_due"):
+        return True
+    return org.account_type == "org_buyer" and org.subscription_status == "none"
 
 
 def plans_for(account_type: str) -> list[Plan]:
@@ -61,6 +71,8 @@ def plan_for_price(price: str | None, lookup_key: str | None = None) -> Plan | N
 
 # --- Metered actions ---------------------------------------------------------------------------------
 MANIFEST_EXTRACTION = "manifest_extraction"  # parsing and normalizing an uploaded manifest or document
+INCLUDED_ANALYSIS = "included_analysis"  # first analysis of a buyer's own manifest: part of its upload credit
+WEB_SOURCING = "web_sourcing"  # one web supplier search for a sourcing request
 DEEP_ANALYSIS = "deep_analysis"  # one full analysis run over a document
 ASSISTANT_ANSWER = "assistant_answer"  # one model-written assistant answer
 
@@ -74,6 +86,10 @@ def cost_of(action: str, units: int = 0) -> int:
         if units < MANIFEST_FLAT_LIMIT:
             return 1
         return math.ceil(units / MANIFEST_ITEMS_PER_CREDIT)
+    if action == INCLUDED_ANALYSIS:
+        return 0
+    if action == WEB_SOURCING:
+        return settings.credit_cost_web_sourcing
     if action == DEEP_ANALYSIS:
         return settings.credit_cost_deep_analysis
     if action == ASSISTANT_ANSWER:

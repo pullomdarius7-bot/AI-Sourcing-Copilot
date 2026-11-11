@@ -86,23 +86,25 @@ def estimate_lot(items: list[Any], asking_price: Decimal | None) -> LotEstimate:
     )
 
 
-def default_freight(lot_type: str | None, pallet_count: int | None) -> Decimal:
+def default_freight(lot_type: str | None, pallet_count: int | None, *, per_pallet: Decimal = FREIGHT_PER_PALLET,
+                    truckload: Decimal = FREIGHT_TRUCKLOAD) -> Decimal:
+    """Inbound freight when the buyer gives no quote; per_pallet and truckload are the account's freight overlays."""
     if lot_type == "truckload":
-        return FREIGHT_TRUCKLOAD
+        return truckload
     pallets = pallet_count or (1 if lot_type in (None, "single_pallet") else 4)
-    return FREIGHT_PER_PALLET * max(1, pallets)
+    return per_pallet * max(1, pallets)
 
 
 def deep_analysis(
     items: list[dict[str, Any]], *, asking_price: Decimal, channel: str, target_margin_pct: Decimal,
-    freight: Decimal, ai_resale: dict[int, dict[str, Any]] | None = None,
+    freight: Decimal, ai_resale: dict[int, dict[str, Any]] | None = None, handling_per_unit: Decimal = Decimal("0"),
 ) -> dict[str, Any]:
     """Itemized net profit model. items: dicts with position, title, category, condition, quantity, unit_msrp.
     ai_resale: optional validated per-item model estimates {position: {"resale_unit", "velocity"}}."""
     fee_rate = CHANNEL_FEES[channel]
     total_msrp = sum((Decimal(str(i["unit_msrp"] or 0)) * i["quantity"] for i in items), Decimal("0"))
     rows = []
-    totals = {k: Decimal("0") for k in ("revenue", "fees", "refurbishment", "freight", "cost", "net_profit")}
+    totals = {k: Decimal("0") for k in ("revenue", "fees", "refurbishment", "handling", "freight", "cost", "net_profit")}
     units = 0
     for it in items:
         qty = int(it["quantity"])
@@ -114,12 +116,14 @@ def deep_analysis(
         revenue = money(unit_value * sellable)
         fees = money(revenue * fee_rate)
         refurb = money(revenue * REFURBISHMENT.get(it["condition"], Decimal("0.08")))
+        handling = money(handling_per_unit * sellable)
         share = (unit_msrp * qty / total_msrp) if total_msrp else (Decimal(1) / len(items))
         freight_alloc = money(freight * share)
         cost = money(asking_price * share)
-        net = revenue - fees - refurb - freight_alloc - cost
+        net = revenue - fees - refurb - handling - freight_alloc - cost
         units += qty
-        for key, value in (("revenue", revenue), ("fees", fees), ("refurbishment", refurb), ("freight", freight_alloc),
+        for key, value in (("revenue", revenue), ("fees", fees), ("refurbishment", refurb), ("handling", handling),
+                           ("freight", freight_alloc),
                            ("cost", cost), ("net_profit", net)):
             totals[key] += value
         rows.append({
@@ -127,12 +131,14 @@ def deep_analysis(
             "quantity": qty, "unit_msrp": float(unit_msrp), "resale_unit": float(unit_value),
             "resale_source": "ai" if model else "rules", "velocity": (model or {}).get("velocity"),
             "sellable_units": float(sellable.quantize(Decimal("0.1"))), "revenue": float(revenue), "fees": float(fees),
-            "refurbishment": float(refurb), "freight": float(freight_alloc), "cost": float(cost),
+            "refurbishment": float(refurb), "handling": float(handling), "freight": float(freight_alloc),
+            "cost": float(cost),
             "net_profit": float(money(net)),
         })
     revenue, net = totals["revenue"], totals["net_profit"]
     target = target_margin_pct / 100
-    max_bid = money(revenue * (1 - target) - totals["fees"] - totals["refurbishment"] - totals["freight"])
+    max_bid = money(revenue * (1 - target) - totals["fees"] - totals["refurbishment"] - totals["handling"]
+                    - totals["freight"])
     max_bid = max(max_bid, Decimal("0"))
     if asking_price <= max_bid:
         decision = "buy"
@@ -152,6 +158,7 @@ def deep_analysis(
         "assumptions": {
             "channel": channel, "channel_label": CHANNEL_LABELS[channel], "fee_rate_pct": float(fee_rate * 100),
             "target_margin_pct": float(target_margin_pct), "freight": float(money(freight)),
+            "handling_per_unit": float(handling_per_unit),
             "asking_price": float(asking_price),
             "unsellable_pct": {k: float(v * 100) for k, v in UNSELLABLE.items()},
             "refurbishment_pct": {k: float(v * 100) for k, v in REFURBISHMENT.items()},

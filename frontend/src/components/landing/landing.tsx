@@ -38,7 +38,8 @@ function planCards(plans: PublicPlan[]): PlanCard[] {
       price: dollars(solo.price_cents),
       suffix: "/ month",
       features: [
-        `${solo.monthly_credits} Full Manifest Analyses per month`,
+        `${solo.monthly_credits} Full Manifest Analyses per month (up to 500 lines each)`,
+        "AI supplier sourcing: we search the marketplace and the web for what you need",
         "Multi-channel margin & fee calculator (eBay, Amazon, Direct)",
         "Real-time condition grade discounting",
         "Exportable deal sheets (PDF/CSV)",
@@ -57,7 +58,7 @@ function planCards(plans: PublicPlan[]): PlanCard[] {
         `${team.monthly_credits} manifest analyses per month & batch parsing`,
         `Up to ${team.seats} team seats with role-based permissions`,
         "Custom margin rules, freight cost overlays, and API export",
-        "Priority AI processing queue & dedicated account manager",
+        "Priority AI processing queue & priority support",
         topUp(team),
       ],
       cta: "Set Up Your Team",
@@ -67,11 +68,13 @@ function planCards(plans: PublicPlan[]): PlanCard[] {
     {
       name: supplier.name,
       price: dollars(supplier.price_cents),
-      suffix: "/ month + tiered lead matching",
+      suffix: "/ month",
       features: [
         "Unlimited wholesale inventory lot listings",
         "Direct placement in Buyer Sourcing Marketplace",
+        "Buyer requests matched to your inventory, no per-lead fees",
         "Verified buyer RFQ management dashboard",
+        "Unlimited team seats",
         `Automated catalog standardization and batch manifest cleansing (${supplier.monthly_credits} credits a month)`,
         topUp(supplier),
       ],

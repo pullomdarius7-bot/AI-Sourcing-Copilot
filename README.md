@@ -451,9 +451,14 @@ catalog or if the landing page hard-codes a price, credit or seat number again.
 
 | Plan | Price | Credits a month | Seats | Extra credit |
 |---|---|---|---|---|
-| Solo Operator (`solo_buyer_monthly`) | $79 | 25 | 1 | $3.50 |
-| Sourcing Team (`enterprise_buyer_monthly`) | $249 | 250 | 5 | $1.25 |
-| Verified Supplier (`supplier_monthly`) | $149 | 100 | unlimited | $1.75 |
+| Solo Operator (`solo_buyer_monthly`) | $79 | 25 | 1 | $2.99 |
+| Sourcing Team (`enterprise_buyer_monthly`) | $249 | 250 | 5 | $0.99 |
+| Verified Supplier (`supplier_monthly`) | $149 | 100 | unlimited | $1.49 |
+
+Extra credits cost the plan's own per-credit rate, rounded down ($79/25, $249/250, $149/100), so running out never
+costs more than the plan. They can be bought once the balance is down to 5 credits (enough headroom for a
+large manifest). Supplier seats are unlimited: more people answering buyers means faster replies, and seats cost
+nothing to run.
 
 **Seats.** A seat is an active user or an open invitation. Inviting, reactivating someone or accepting an
 invitation is refused with `409 seat_limit_reached` (with `seats_used` and `seat_limit`) when no seat is free.
@@ -461,7 +466,7 @@ Before subscribing, a team account has `TRIAL_SEATS` (5) and a solo account 1. A
 removed, but no one new can join until the account is back under its limit. `GET /api/v1/seats` and the Team and
 Billing pages show the usage.
 
-**Pay-as-you-go credits.** A subscriber whose balance is down to `TOPUP_AVAILABLE_AT_OR_BELOW` (2) credits or
+**Pay-as-you-go credits.** A subscriber whose balance is down to `TOPUP_AVAILABLE_AT_OR_BELOW` (5) credits or
 fewer can buy 5 to 500 extra credits at the plan's per-credit price from the Billing page
 (`POST /api/v1/billing/create-topup-session`, a one-off Stripe Checkout payment; no Stripe price setup needed).
 Credits are granted when Stripe confirms the payment (`checkout.session.completed`, or
@@ -470,3 +475,51 @@ paid matches the credits priced. Bought credits are spent after the month's plan
 are kept if the subscription ends (they can be used again after resubscribing). A 402 for missing credits says
 whether a top-up is possible (`can_top_up`). Trial accounts cannot buy credits; they choose a plan.
 Migration `0012` adds `organizations.purchased_credits`.
+
+## AI sourcing engine
+
+Buyers describe what they need at **AI Sourcing** (`/sourcing`): product, category, condition, quantity, target
+price, delivery region and date.
+
+1. **Marketplace first (free).** Published lots whose title or lines match the request (and its category) are
+   listed straight away.
+2. **Then the web.** When no lot matches (or the buyer asks), a `sourcing.web_search` job searches through a search
+   API (`SEARCH_PROVIDER`: self-hosted SearXNG or Brave Search; search-result pages are never scraped), skips
+   marketplaces and social networks, and reads up to `WEB_SOURCING_MAX_SITES` supplier websites: the page found plus
+   up to two contact / about / wholesale pages each. The crawler honours robots.txt, fetches only public internet
+   addresses (every redirect re-checked, against server-side request forgery), reads HTML only, and limits size
+   and time. `/bot` explains it to website owners.
+3. **Organized results.** The AI model turns each site into a supplier profile (business type, location, matching
+   products, MOQ, pricing, wholesale terms, contact, relevance) and every detail is checked against the pages:
+   products and terms must be quoted from them, and a contact email must be published there. Unverifiable values
+   are dropped. Without a model, a smaller profile is built by rules. Sites that are not B2B suppliers or not
+   relevant are discarded. Costs `CREDIT_COST_WEB_SOURCING` (2) credits, refunded when nothing is found; the buyer
+   is emailed when results are ready.
+4. **Into the workflow.** A found supplier can be saved to the supplier directory with its contact, ready for an RFQ.
+5. **Invitations.** Suppliers found on the web are invited to join and quote (below). Once on the platform they see
+   open buyer requests under **Buyer requests** (`/supplier/requests`, masked, best matches first, no per-lead
+   fees) and answer with one of their lots, which opens a masked negotiation in which they made the first offer.
+
+**Invitation safeguards** (`backend/app/sourcing/invites.py`): only an address the business published on its own
+site; only requests the buyer opened to suppliers; the buyer stays anonymous; one email per domain per
+`INVITE_COOLDOWN_DAYS` (90), with later requests added to the same invitation; a global `INVITE_DAILY_LIMIT`;
+businesses already on the platform are skipped; every email says why it was sent, carries a one-click unsubscribe
+(address and domain suppressed for good) and the sender's postal address. Without
+`INVITE_SENDER_POSTAL_ADDRESS` invitations are recorded but held. `SUPPLIER_INVITES=review` records without
+sending; `off` disables them. Invitation and suppression records are platform-level: no account can read them.
+
+## What each plan includes
+
+| Promise on the pricing page | Where it is |
+|---|---|
+| Full manifest analyses | **Deal analyzer** (`/deals`): upload manifests from auctions or outside suppliers (batch: up to 20 files). Each becomes a private lot (never listed), is normalized, and analysed automatically with the account's margin rules once its cost is known. One credit per manifest up to 500 lines; the first analysis is included, re-runs cost one credit. |
+| Exportable deal sheets (PDF/CSV) | Every deep analysis: `GET /api/marketplace/analyses/{id}/deal-sheet.pdf` / `.csv` |
+| AI supplier sourcing | `/sourcing`, above |
+| Custom margin rules & freight overlays (Team) | **Team tools** (`/team-tools`): sales channel, minimum net margin, freight per pallet / truckload, handling per unit, used as the defaults of every analysis |
+| API export (Team) | Read-only keys in Team tools; `GET /api/export/analyses`, `/api/export/sourcing-requests`, `/api/export/manifests` with `Authorization: Bearer sca_...` |
+| Priority AI processing (Team) | Team accounts' jobs carry priority 10 and are claimed first |
+| Priority support (Team) | `SUPPORT_EMAIL` shown on Billing; Team requests are marked `[Priority]` |
+| Buyer requests matched to your inventory (Supplier) | `/supplier/requests` |
+
+Team features are also available to team accounts during their free trial. Migration `0013` adds the tables;
+`alembic downgrade 0012` removes them.

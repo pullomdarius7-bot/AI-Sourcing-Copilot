@@ -10,4 +10,4 @@ export function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-export const config = { matcher: ["/onboarding/:path*", "/billing/:path*", "/marketplace/:path*", "/supplier/:path*", "/messages/:path*", "/rfq/:path*", "/dashboard/:path*", "/team/:path*", "/audit/:path*", "/security/:path*", "/documents/:path*", "/upload/:path*", "/jobs/:path*", "/requirements/:path*", "/review/:path*", "/suppliers/:path*", "/rfqs/:path*", "/reference/:path*", "/assistant/:path*"] };
+export const config = { matcher: ["/onboarding/:path*", "/billing/:path*", "/marketplace/:path*", "/supplier/:path*", "/messages/:path*", "/rfq/:path*", "/sourcing/:path*", "/deals/:path*", "/team-tools/:path*", "/dashboard/:path*", "/team/:path*", "/audit/:path*", "/security/:path*", "/documents/:path*", "/upload/:path*", "/jobs/:path*", "/requirements/:path*", "/review/:path*", "/suppliers/:path*", "/rfqs/:path*", "/reference/:path*", "/assistant/:path*"] };

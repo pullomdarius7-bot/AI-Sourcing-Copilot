@@ -89,15 +89,20 @@ class LotDetailOut(LotCardOut):
     items: list[ItemOut]
     analyses: list[AnalysisOut]
     open_thread_id: uuid.UUID | None
+    own: bool
+    defaults: dict[str, Any]
     credit_balance: int
     ai_access: bool
     analysis_cost: int
 
 
 class AnalysisIn(BaseModel):
-    channel: Literal["ebay", "amazon", "direct"] = "ebay"
-    target_margin_pct: float = Field(default=35, ge=0, le=90)
+    """Empty fields use the account's margin rules (Sourcing Team) or the built-in assumptions."""
+
+    channel: Literal["ebay", "amazon", "direct"] | None = None
+    target_margin_pct: float | None = Field(default=None, ge=0, le=90)
     freight_cost: float | None = Field(default=None, ge=0, le=1_000_000)
+    handling_per_unit: float | None = Field(default=None, ge=0, le=10_000)
 
 
 class SupplierLotOut(BaseModel):

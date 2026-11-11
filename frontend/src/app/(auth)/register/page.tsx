@@ -37,6 +37,19 @@ export default function RegisterPage() {
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
 
+  const [invite, setInvite] = useState<{ token: string; company_name: string; request_count: number; demand: { title: string; quantity: number | null }[] } | null>(null);
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("invite");
+    if (!token) return;
+    api<{ company_name: string; request_count: number; demand: { title: string; quantity: number | null }[] }>(`invites/preview?token=${encodeURIComponent(token)}`)
+      .then((preview) => {
+        setInvite({ token, ...preview });
+        setRole("supplier");
+      })
+      .catch(() => setInvite(null));
+  }, []);
+
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("role");
     if (requested && (ROLES as string[]).includes(requested)) setRole(requested as AccountType);
@@ -47,7 +60,9 @@ export default function RegisterPage() {
     setBusy(true);
     setError(null);
     try {
-      await api("auth/register", { body: { ...form, account_type: role } });
+      await api("auth/register", {
+        body: { ...form, account_type: role, organization_name: invite?.company_name, invite_token: invite?.token },
+      });
       setDone(true);
     } catch (err) {
       setError(errorMessage(err));
@@ -77,6 +92,12 @@ export default function RegisterPage() {
         <h1 className="text-2xl font-semibold">{intro.title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{intro.text}</p>
       </div>
+      {invite && (
+        <Alert>
+          <strong>{invite.request_count} buyer request{invite.request_count === 1 ? "" : "s"}</strong> for products {invite.company_name} sells
+          {invite.demand[0] ? `, including "${invite.demand[0].title}"` : ""}. Create your free supplier account to see and answer them.
+        </Alert>
+      )}
       {error && <Alert variant="error">{error}</Alert>}
       <div className="space-y-2">
         <Label htmlFor="name">Your name</Label>
