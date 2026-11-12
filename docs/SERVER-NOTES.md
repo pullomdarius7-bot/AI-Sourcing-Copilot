@@ -9,7 +9,7 @@ No passwords or keys go in here.
 |---|---|
 | Provider | Contabo VPS (host name `vmi3745291`), Ubuntu |
 | IP address | `62.146.227.209` |
-| Public address (planned) | `https://pullomsourceai.duckdns.org` (DuckDNS, free) |
+| Public address | `https://pullomsourceai.duckdns.org` (DuckDNS, free). HTTPS certificate issued 2026-11-12, valid to 2027-02-10 (auto-renews) |
 | App folder | `/opt/copilot/app` (a git checkout of branch `ccr-b945e3ef-n46e9q`) |
 | Settings file | `/opt/copilot/app/.env` (owned by user `deploy`; holds all secrets) |
 | Runs as | Docker Compose, user `deploy` (`sudo -iu deploy`, then `cd /opt/copilot/app`) |
@@ -38,32 +38,22 @@ VPS > VNC), which does not depend on SSH.
 
 ## Status (2026-11-12)
 
-- Updated to the latest code (back office, guest quotes, Termux scripts); database migrated to `0015`; all
-  containers healthy.
-- Still in **private mode**: `DOMAIN=localhost`, no nginx, site only reachable through an SSH tunnel.
-- `pullomsourceai.duckdns.org` returns an error because nothing answers on ports 80/443 yet.
-- Locked out of SSH from Termux after logging out (the new Termux key is not on the server yet).
+- **Live at https://pullomsourceai.duckdns.org** with HTTPS (nginx + Let's Encrypt, via `scripts/ssl-init.sh`).
+- Code: branch `ccr-b945e3ef-n46e9q`, with back office, guest quotes and Termux scripts. Database at migration `0015`.
+- Containers healthy. `docker-compose` uses `docker-compose.yml:docker-compose.prod.yml`; `COMPOSE_PROFILES` empty.
+- Settings in effect: `REQUIRE_EMAIL_VERIFICATION=false` (no mail service yet), `PLATFORM_ADMIN_REQUIRES_MFA=true`.
+- Not set up yet: mail relay (`SMTP_*`; mail is captured in mailpit), Stripe keys, AI keys, web search key,
+  `INVITE_SENDER_POSTAL_ADDRESS` (supplier invitations are held).
+- Still to do: enable two-factor for the owner account, grant platform admin, send the link to the business partner.
+- Termux login works with `ssh -i ~/.ssh/copilot_server2 root@62.146.227.209`.
 
 ## Next steps, in order
 
-1. Get back in (provider console), add Termux's key to `/root/.ssh/authorized_keys`, confirm `ssh root@62.146.227.209` works.
-2. DuckDNS dashboard: `pullomsourceai` must point at `62.146.227.209`.
-3. Go public (as `deploy` in `/opt/copilot/app`):
-   ```
-   ./scripts/configure-prod.sh pullomsourceai.duckdns.org YOUR@EMAIL
-   ./scripts/set-env.sh COMPOSE_PROFILES ""
-   ./scripts/set-env.sh REQUIRE_EMAIL_VERIFICATION false
-   ./scripts/set-env.sh PLATFORM_ADMIN_REQUIRES_MFA true
-   chmod +x infra/nginx/99-reload-certs.sh
-   ./scripts/ssl-init.sh --placeholder
-   docker compose up -d --wait
-   ./scripts/ssl-init.sh
-   ```
-4. Open the site, register, turn on two-factor under Security, then
-   `docker compose exec backend python -m app.ops grant-platform-admin YOUR@EMAIL`.
-5. Share the link with the business partner.
-6. Later: email service (SMTP), Stripe keys, AI key, web search key; turn `REQUIRE_EMAIL_VERIFICATION` back on
-   once email works.
+1. Owner account: register at the site, turn on two-factor under Security, then as `deploy` in `/opt/copilot/app`:
+   `docker compose exec backend python -m app.ops grant-platform-admin YOUR@EMAIL`
+2. Check the Back office **Health** tab; it lists anything still missing.
+3. Share `https://pullomsourceai.duckdns.org` with the partner.
+4. Later: mail relay, then set `REQUIRE_EMAIL_VERIFICATION=true`; Stripe, AI and search keys.
 
 ## Handy commands (as `deploy` in `/opt/copilot/app`)
 
