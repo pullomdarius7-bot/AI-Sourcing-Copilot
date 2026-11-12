@@ -79,6 +79,8 @@ x-backend-env: &backend-env
   TOPUP_AVAILABLE_AT_OR_BELOW: ${TOPUP_AVAILABLE_AT_OR_BELOW:-5}
   TRIAL_SEATS: ${TRIAL_SEATS:-5}
   SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
+  # Back office: platform admins need two-factor sign-in while this is true
+  PLATFORM_ADMIN_REQUIRES_MFA: ${PLATFORM_ADMIN_REQUIRES_MFA:-true}
   # AI sourcing engine: web supplier discovery and supplier invitations
   SEARCH_PROVIDER: ${SEARCH_PROVIDER:-}
   SEARXNG_URL: ${SEARXNG_URL:-}
