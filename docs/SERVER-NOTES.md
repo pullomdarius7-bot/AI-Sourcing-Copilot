@@ -17,7 +17,19 @@ No passwords or keys go in here.
 
 ## How to log in
 
-From Termux: `ssh root@62.146.227.209`, then `sudo -iu deploy` and `cd /opt/copilot/app`.
+From Termux, use the key file by name (the private key itself is never stored in this repo):
+
+    ssh -i ~/.ssh/copilot_server2 root@62.146.227.209
+
+Then `sudo -iu deploy` and `cd /opt/copilot/app`.
+
+Optional shortcut, run once in Termux (not on the server):
+
+    printf 'Host copilot\n  HostName 62.146.227.209\n  User root\n  IdentityFile ~/.ssh/copilot_server2\n' >> ~/.ssh/config
+
+After that, `ssh copilot` logs in.
+
+Never commit private keys (files without `.pub`) to this repo.
 
 The server accepts **SSH keys only** (no passwords): `scripts/server-bootstrap.sh` turned password login off in
 `/etc/ssh/sshd_config.d/10-copilot.conf`. Termux's key is `~/.ssh/id_ed25519` (made 2026-11-12); it must be listed
