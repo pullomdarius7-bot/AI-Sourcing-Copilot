@@ -156,8 +156,30 @@ def json_output_schema(schema: Any) -> Any:
         out["additionalProperties"] = False
     if isinstance(out.get("type"), list):
         types = out.pop("type")
-        return {"anyOf": [{**out, "type": t} if t != "null" else {"type": "null"} for t in types]}
+        return {"anyOf": [_branch(out, t) for t in types]}
     return out
+
+
+_PY_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,), "integer": (int,), "number": (int, float), "boolean": (bool,), "null": (type(None),),
+}
+
+
+def _branch(node: dict[str, Any], json_type: str) -> dict[str, Any]:
+    """One arm of a `"type": [...]` union. An enum keeps only the values of that arm's type: the API rejects
+    `null` inside a string enum, so `{"type": ["string", "null"], "enum": ["a", None]}` becomes
+    `anyOf: [{"type": "string", "enum": ["a"]}, {"type": "null"}]`."""
+    if json_type == "null":
+        return {"type": "null"}
+    arm = {**node, "type": json_type}
+    if "enum" in arm:
+        wanted = _PY_TYPES.get(json_type, (object,))
+        values = [v for v in arm["enum"] if isinstance(v, wanted) and not (json_type != "boolean" and isinstance(v, bool))]
+        if values:
+            arm["enum"] = values
+        else:
+            arm.pop("enum")
+    return arm
 
 
 class OpenAIProvider(LLMProvider):

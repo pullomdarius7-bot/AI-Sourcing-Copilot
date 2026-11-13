@@ -82,9 +82,39 @@ def test_json_output_schema_keeps_the_shape_and_drops_what_the_api_rejects():
     from app.sourcing import extract
 
     allowed = {"type", "properties", "required", "additionalProperties", "items", "enum", "anyOf", "description"}
+    python_types = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "null": type(None)}
+
+    def check(node, where):
+        """What the API checks: one declared type per node, and every enum value of that type."""
+        if isinstance(node, dict):
+            if "type" in node:
+                assert isinstance(node["type"], str), f"{where}: a list of types must become anyOf"
+            if "enum" in node:
+                assert node["enum"], f"{where}: empty enum"
+                for value in node["enum"]:
+                    assert isinstance(value, python_types[node["type"]]), f"{where}: enum value {value!r}"
+            for key, value in node.items():
+                if key == "properties":
+                    for name, sub in value.items():
+                        check(sub, f"{where}.{name}")
+                elif key != "enum":
+                    check(value, where)
+        elif isinstance(node, list):
+            for item in node:
+                check(item, where)
+
     for schema in (ANALYSIS_JSON_SCHEMA, EXTRACTION_JSON_SCHEMA, NORMALIZE_SCHEMA, PDF_SCHEMA, VALUATION_SCHEMA,
                    PLAN_SCHEMA, ANSWER_SCHEMA, extract.SCHEMA):
-        assert keywords(json_output_schema(schema), set()) <= allowed
+        converted = json_output_schema(schema)
+        assert keywords(converted, set()) <= allowed
+        check(converted, "schema")
+
+
+def test_a_nullable_enum_keeps_null_out_of_the_string_choices():
+    from app.ai.providers import json_output_schema
+
+    out = json_output_schema({"type": ["string", "null"], "enum": ["new", "used", None]})
+    assert out == {"anyOf": [{"type": "string", "enum": ["new", "used"]}, {"type": "null"}]}
 
 
 async def test_anthropic_without_json_is_retryable():
