@@ -85,15 +85,22 @@ async def run_checks(db: AsyncSession) -> list[dict[str, Any]]:
                         "ok" if settings.stripe_secret_key and settings.stripe_webhook_secret else "warn",
                         "Configured" if settings.stripe_secret_key and settings.stripe_webhook_secret
                         else "STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET not set: nobody can subscribe"))
-    checks.append(Check("Email", "ok" if settings.email_backend == "smtp" else "warn",
-                        f"SMTP {settings.smtp_host}:{settings.smtp_port}" if settings.email_backend == "smtp"
-                        else f"'{settings.email_backend}' backend: emails are written to the log, not sent"))
+    captured = settings.email_backend == "smtp" and settings.smtp_host == "mailpit"
+    if settings.email_backend != "smtp":
+        checks.append(Check("Email", "warn", f"'{settings.email_backend}' backend: emails are written to the log, not sent"))
+    elif captured:
+        checks.append(Check("Email", "warn", "Captured by Mailpit: emails reach nobody. Set SMTP_* to a real mail service"))
+    else:
+        checks.append(Check("Email", "ok", f"SMTP {settings.smtp_host}:{settings.smtp_port}"))
     held = await db.scalar(select(func.count()).select_from(SupplierInvite).where(SupplierInvite.status == "held")) or 0
     if settings.supplier_invites != "auto":
         checks.append(Check("Supplier invitations", "warn", f"Mode '{settings.supplier_invites}': nothing is sent"))
     elif not settings.invite_sender_postal_address.strip():
         checks.append(Check("Supplier invitations", "warn",
                             f"INVITE_SENDER_POSTAL_ADDRESS not set: {held} invitation(s) held"))
+    elif captured:
+        checks.append(Check("Supplier invitations", "warn",
+                            "Recorded as sent but captured by Mailpit: set SUPPLIER_INVITES=review until real email works"))
     else:
         checks.append(Check("Supplier invitations", "ok", f"Sending ({held} held)"))
     checks.append(Check("Virus scanning", "ok" if settings.scan_backend in ("both", "clamav") else "warn",

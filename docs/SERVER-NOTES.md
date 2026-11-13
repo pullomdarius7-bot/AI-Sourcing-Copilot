@@ -42,6 +42,10 @@ VPS > VNC), which does not depend on SSH.
 - Code: branch `ccr-b945e3ef-n46e9q`, with back office, guest quotes and Termux scripts. Database at migration `0015`.
 - Containers healthy. `docker-compose` uses `docker-compose.yml:docker-compose.prod.yml`; `COMPOSE_PROFILES` empty.
 - Settings in effect: `REQUIRE_EMAIL_VERIFICATION=false` (no mail service yet), `PLATFORM_ADMIN_REQUIRES_MFA=true`.
+- AI: local Ollama container (`COMPOSE_PROFILES=local-llm,search`), model `llama3.2:3b`,
+  `LOCAL_LLM_URL=http://ollama:11434`, `AI_PROVIDER_ORDER=local,anthropic,openai` (no Anthropic/OpenAI key yet).
+  Web search: self-hosted SearXNG (`SEARCH_PROVIDER=searxng`, `SEARXNG_URL=http://searxng:8080`). Health: both OK.
+  Server has 7.8 GB RAM + 4 GB swap.
 - Not set up yet: mail relay (`SMTP_*`; mail is captured in mailpit), Stripe keys, AI keys, web search key,
   `INVITE_SENDER_POSTAL_ADDRESS` (supplier invitations are held).
 - Still to do: enable two-factor for the owner account, grant platform admin, send the link to the business partner.
