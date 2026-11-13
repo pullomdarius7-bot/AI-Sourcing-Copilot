@@ -32,36 +32,69 @@ After that, `ssh copilot` logs in.
 Never commit private keys (files without `.pub`) to this repo.
 
 The server accepts **SSH keys only** (no passwords): `scripts/server-bootstrap.sh` turned password login off in
-`/etc/ssh/sshd_config.d/10-copilot.conf`. Termux's key is `~/.ssh/id_ed25519` (made 2026-11-12); it must be listed
-in `/root/.ssh/authorized_keys` on the server. If locked out, use the provider's console (Contabo control panel >
-VPS > VNC), which does not depend on SSH.
+`/etc/ssh/sshd_config.d/10-copilot.conf`. The key the server knows is Termux's `~/.ssh/copilot_server2` (made
+2026-11-11). A second key, `~/.ssh/id_ed25519` (made 2026-11-12), is NOT on the server; plain `ssh root@...` uses it
+and gets "Permission denied (publickey)". If locked out, use the provider's console (Contabo control panel > VPS >
+VNC), which does not depend on SSH.
 
-## Status (2026-11-12)
+Do app work as `deploy`, not `root` (root-owned files in `/opt/copilot/app` make later updates fail; fix with
+`chown -R deploy:deploy /opt/copilot/app` as root). Never edit tracked files on the server (for example
+`docker-compose.yml`): ask for a repo change instead, or the next `git checkout` refuses to run.
 
-- **Live at https://pullomsourceai.duckdns.org** with HTTPS (nginx + Let's Encrypt, via `scripts/ssl-init.sh`).
-- Code: branch `ccr-b945e3ef-n46e9q`, with back office, guest quotes and Termux scripts. Database at migration `0015`.
-- Containers healthy. `docker-compose` uses `docker-compose.yml:docker-compose.prod.yml`; `COMPOSE_PROFILES` empty.
-- Settings in effect: `REQUIRE_EMAIL_VERIFICATION=false` (no mail service yet), `PLATFORM_ADMIN_REQUIRES_MFA=true`.
-- AI: local Ollama container (`COMPOSE_PROFILES=local-llm,search`), model `llama3.2:3b`,
-  `LOCAL_LLM_URL=http://ollama:11434`, `AI_PROVIDER_ORDER=local,anthropic,openai` (no Anthropic/OpenAI key yet).
-  Web search: self-hosted SearXNG (`SEARCH_PROVIDER=searxng`, `SEARXNG_URL=http://searxng:8080`). Health: both OK.
-  Server has 7.8 GB RAM + 4 GB swap.
-  Two AI jobs failed on 2026-11-13 with "local request timed out" (CPU model slower than the 120 s / 300 s limits).
-  Fixed in code: local calls get LOCAL_LLM_TIMEOUT_SECONDS=900, LOCAL_LLM_NUM_CTX=16384, document text capped at
-  LOCAL_LLM_MAX_INPUT_CHARS=24000; on the server also set JOB_TIMEOUT_SECONDS=1800 and JOB_VISIBILITY_SECONDS=2400.
-- Some setup was done as `root` instead of `deploy`; check `find /opt/copilot/app -user root` is empty.
-- Not set up yet: mail relay (`SMTP_*`; mail is captured in mailpit), Stripe keys, AI keys, web search key,
-  `INVITE_SENDER_POSTAL_ADDRESS` (supplier invitations are held).
-- Still to do: enable two-factor for the owner account, grant platform admin, send the link to the business partner.
-- Termux login works with `ssh -i ~/.ssh/copilot_server2 root@62.146.227.209`.
+## Status (2026-11-13)
+
+**Live:** https://pullomsourceai.duckdns.org with HTTPS (nginx + Let's Encrypt via `scripts/ssl-init.sh`).
+`COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`, `COMPOSE_PROFILES=local-llm,search`.
+
+**Code:** branch `ccr-b945e3ef-n46e9q`. The latest commit to deploy is `ebfb9f6` (worker heartbeat on the shared
+volume), which comes after `7f83a2f` (local AI timeouts). The server was still on `3137c29` on 2026-11-13. A
+hand edit to `docker-compose.yml` (the worker heartbeat path) blocked the update; it was stashed and the same change
+is now in the repo. Database at migration `0015`.
+
+**Settings in effect (.env):**
+- `REQUIRE_EMAIL_VERIFICATION=false` (no mail service yet), `PLATFORM_ADMIN_REQUIRES_MFA=true`.
+- AI: local Ollama container, model `llama3.2:3b`, `LOCAL_LLM_URL=http://ollama:11434`,
+  `AI_PROVIDER_ORDER=local,anthropic,openai`. No Anthropic/OpenAI key. Duplicate `LOCAL_LLM_*` lines were removed.
+- Web search: self-hosted SearXNG, `SEARCH_PROVIDER=searxng`, `SEARXNG_URL=http://searxng:8080`.
+- Server: 7.8 GB RAM + 4 GB swap; about 5.4 GB free with everything running.
+
+**Open problem:** AI jobs (`requirements.extract`, `document.analyze`) failed with "local request timed out": the
+CPU model is slower than the old 120 s per call / 300 s per job limits. Fixed in code (local calls: 900 s timeout,
+16384-token context, document text capped at 24000 characters). To apply on the server, see step 1 below.
 
 ## Next steps, in order
 
-1. Owner account: register at the site, turn on two-factor under Security, then as `deploy` in `/opt/copilot/app`:
-   `docker compose exec backend python -m app.ops grant-platform-admin YOUR@EMAIL`
-2. Check the Back office **Health** tab; it lists anything still missing.
-3. Share `https://pullomsourceai.duckdns.org` with the partner.
-4. Later: mail relay, then set `REQUIRE_EMAIL_VERIFICATION=true`; Stripe, AI and search keys.
+1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):
+   ```
+   git fetch origin ccr-b945e3ef-n46e9q && git checkout -B ccr-b945e3ef-n46e9q origin/ccr-b945e3ef-n46e9q
+   git stash drop                      # only if the old docker-compose.yml edit is still stashed
+   ./scripts/set-env.sh JOB_TIMEOUT_SECONDS 1800
+   ./scripts/set-env.sh JOB_VISIBILITY_SECONDS 2400
+   docker compose up -d --build --wait
+   docker compose exec -T worker python -c "from app.config import get_settings as g; s=g(); print(s.local_llm_timeout_seconds, s.local_llm_num_ctx, s.job_timeout_seconds)"
+   ```
+   The last line must print `900.0 16384 1800`. Then retry the failed jobs in Back office > Jobs.
+   If they still fail, read the errors:
+   `docker compose exec -T db psql -U copilot -d copilot -c "select kind, status, attempts, left(last_error,200) from jobs where status in ('dead','running','queued') order by created_at desc limit 5;"`
+2. Confirm these were done (recommended 2026-11-13, not yet confirmed):
+   - `./scripts/set-env.sh SUPPLIER_INVITES review`. Mail is only captured by Mailpit, so "sent" invitations
+     reach nobody but still start each supplier's 90-day cooldown.
+   - `./scripts/set-env.sh SEARXNG_SECRET "$(openssl rand -hex 32)"` (it was the placeholder `change-me`).
+   - `find /opt/copilot/app -user root | head` prints nothing (some setup was done as root).
+3. Owner account: register at the site, turn on two-factor under Security, then
+   `docker compose exec backend python -m app.ops grant-platform-admin YOUR@EMAIL`.
+4. Share https://pullomsourceai.duckdns.org with the business partner.
+5. Later:
+   - Set up a mail service (`SMTP_*`), then set `REQUIRE_EMAIL_VERIFICATION=true` and `SUPPLIER_INVITES=auto`.
+   - Optionally add an Anthropic key as a fallback; it is used automatically when the local model fails.
+   - Add Stripe keys.
+
+**Reading captured emails** (verification, resets): in a second Termux session run
+`ssh -i ~/.ssh/copilot_server2 -N -L 8025:127.0.0.1:8025 root@62.146.227.209`, then open http://localhost:8025.
+Never expose Mailpit publicly.
+
+**Entering secrets** without showing them or saving them in shell history:
+`read -rsp "Key: " K && ./scripts/set-env.sh NAME "$K"; unset K; echo`
 
 ## Handy commands (as `deploy` in `/opt/copilot/app`)
 
