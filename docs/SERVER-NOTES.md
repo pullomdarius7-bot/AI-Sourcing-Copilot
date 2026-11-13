@@ -62,6 +62,11 @@ is now in the repo. Database at migration `0015`.
 CPU model is slower than the old 120 s per call / 300 s per job limits. Fixed in code (local calls: 900 s timeout,
 16384-token context, document text capped at 24000 characters). To apply on the server, see step 1 below.
 
+**Update 2026-11-13 (later):** a manifest upload then failed with "local returned HTTP 500" (Ollama itself
+erroring; cause not yet known, likely memory). Code now shows Ollama's own reason in the error message and defaults
+to a smaller window (`LOCAL_LLM_NUM_CTX=8192`, `LOCAL_LLM_MAX_INPUT_CHARS=12000`). After deploying, if it still
+fails, the site's error message and `docker compose logs --tail=40 ollama` give the cause.
+
 ## Next steps, in order
 
 1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):

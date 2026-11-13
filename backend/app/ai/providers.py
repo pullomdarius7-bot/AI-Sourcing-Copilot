@@ -59,7 +59,11 @@ class LLMProvider:
             if owns:
                 await client.aclose()
         if response.status_code in (408, 409, 425, 429) or response.status_code >= 500:
-            raise ProviderError(f"{self.name} returned HTTP {response.status_code}", retryable=True)
+            # The server's own reason (e.g. Ollama: "model requires more system memory") is what makes this fixable.
+            detail = " ".join(response.text.split())[:200]
+            raise ProviderError(
+                f"{self.name} returned HTTP {response.status_code}" + (f": {detail}" if detail else ""), retryable=True
+            )
         if response.status_code >= 400:
             raise ProviderError(
                 f"{self.name} rejected the request (HTTP {response.status_code}): {response.text[:200]}",

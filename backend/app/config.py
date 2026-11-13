@@ -145,8 +145,8 @@ class Settings(BaseSettings):
     # A model on the server's own CPU is far slower than a hosted one and only reads what fits in its context
     # window (Ollama's default is 2048 tokens, which silently cuts long documents short).
     local_llm_timeout_seconds: float = 900.0
-    local_llm_num_ctx: int = 16384
-    local_llm_max_input_chars: int = 24000  # caps document text sent to every provider while a local model is on
+    local_llm_num_ctx: int = 8192
+    local_llm_max_input_chars: int = 12000  # caps document text sent to every provider while a local model is on
     local_llm_max_output_tokens: int = 4096
 
     # --- Requirement extraction & review ---

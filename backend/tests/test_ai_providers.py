@@ -150,3 +150,11 @@ def test_build_providers_follows_order_and_configuration():
     cfg2 = cfg.model_copy(update={"openai_api_key": "", "local_llm_url": "", "anthropic_api_key": ""})
     assert build_providers(cfg2) == []
     assert [p.external for p in build_providers(cfg)] == [True, False]
+
+
+async def test_a_server_error_carries_the_servers_own_reason():
+    reply = httpx.Response(500, json={"error": "model requires more system memory (6.1 GiB) than is available (4.2 GiB)"})
+    provider = LocalProvider("http://ollama:11434", "m", client_for(lambda r: reply))
+    with pytest.raises(ProviderError) as err:
+        await provider.generate(REQ)
+    assert err.value.retryable and "HTTP 500" in str(err.value) and "more system memory" in str(err.value)
