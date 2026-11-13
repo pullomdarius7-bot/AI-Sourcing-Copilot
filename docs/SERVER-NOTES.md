@@ -67,6 +67,14 @@ erroring; cause not yet known, likely memory). Code now shows Ollama's own reaso
 to a smaller window (`LOCAL_LLM_NUM_CTX=8192`, `LOCAL_LLM_MAX_INPUT_CHARS=12000`). After deploying, if it still
 fails, the site's error message and `docker compose logs --tail=40 ollama` give the cause.
 
+**Update 2026-11-13 (evening):** server updated to the local-AI fixes. Manifest analysis worked on the local
+model (slow). Requirement extraction did not: one piece took over 15 minutes on `llama3.2:3b` and timed out.
+Decision: hosted AI first, local as backup. `ANTHROPIC_API_KEY` is set (key named `copilot-server`, $5 monthly
+limit in the console; check its expiry date there) and `AI_PROVIDER_ORDER=anthropic,local`; health shows
+`anthropic, local`. `SUPPLIER_INVITES=review` is set. When the monthly limit is used up, the site falls back to
+the slow local model. Five old jobs failed from the timeouts; retry them in Back office > Jobs.
+Secrets are entered with the `read -rsp` line below: run it unchanged, then paste at the `Key:` prompt.
+
 ## Next steps, in order
 
 1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):
