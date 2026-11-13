@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import gateway
-from app.ai.service import get_ai_service
+from app.ai.service import get_ai_service, input_limit
 from app.audit import record
 from app.billing.plans import DEEP_ANALYSIS
 from app.config import get_settings
@@ -105,9 +105,10 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
         raise PermanentError("The document has no extractable text")
     index = gr.TextIndex(text)
     run.source_text_sha256 = sha(text)
-    chunks = chunk_text(text, settings.extraction_chunk_chars, settings.extraction_chunk_overlap, settings.extraction_max_chunks)
-
     service = get_ai_service()
+    # Chunks never exceed what one call may carry (smaller with a model on the server's own CPU).
+    size = min(settings.extraction_chunk_chars, input_limit(service.providers))
+    chunks = chunk_text(text, size, min(settings.extraction_chunk_overlap, size // 10), settings.extraction_max_chunks)
     try:  # one charge covers every chunk of the run
         permit = await gateway.acquire(db, run.organization_id, DEEP_ANALYSIS, run.id, user_id=run.created_by)
     except gateway.PaymentRequired as exc:

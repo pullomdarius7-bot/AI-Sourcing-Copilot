@@ -30,6 +30,9 @@ x-backend-env: &backend-env
   # Job workers
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
   JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  # With a local model, raise both (e.g. 1800 / 2400): one document can need several slow calls.
+  JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
+  JOB_VISIBILITY_SECONDS: ${JOB_VISIBILITY_SECONDS:-600}
   # Requirement extraction & review
   REQUIRE_SEPARATE_APPROVER: ${REQUIRE_SEPARATE_APPROVER:-true}
   BULK_VERIFY_MIN_CONFIDENCE: ${BULK_VERIFY_MIN_CONFIDENCE:-0.85}
@@ -52,6 +55,10 @@ x-backend-env: &backend-env
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
   LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
   LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.1:8b}
+  LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-900}
+  LOCAL_LLM_NUM_CTX: ${LOCAL_LLM_NUM_CTX:-16384}
+  LOCAL_LLM_MAX_INPUT_CHARS: ${LOCAL_LLM_MAX_INPUT_CHARS:-24000}
+  AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-120}
   # Sourcing assistant (works without any model: deterministic mode)
   AGENT_MODE: ${AGENT_MODE:-auto}
   AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-4}

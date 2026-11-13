@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     local_llm_url: str = ""  # Ollama base URL, e.g. http://ollama:11434
     local_llm_model: str = "llama3.1:8b"
+    # A model on the server's own CPU is far slower than a hosted one and only reads what fits in its context
+    # window (Ollama's default is 2048 tokens, which silently cuts long documents short).
+    local_llm_timeout_seconds: float = 900.0
+    local_llm_num_ctx: int = 16384
+    local_llm_max_input_chars: int = 24000  # caps document text sent to every provider while a local model is on
+    local_llm_max_output_tokens: int = 4096
 
     # --- Requirement extraction & review ---
     require_separate_approver: bool = True  # the approver may not have created or reviewed the run

@@ -15,6 +15,8 @@ from app.ai.schemas import ANALYSIS_JSON_SCHEMA
 from app.config import get_settings
 from tests.fakes import good_analysis
 
+settings = get_settings()
+
 REQ = LLMRequest("system rules", "document text", ANALYSIS_JSON_SCHEMA)
 
 
@@ -98,6 +100,19 @@ async def test_local_provider_sends_schema_as_format():
     assert seen["url"] == "http://ollama:11434/api/chat" and seen["body"]["format"] == ANALYSIS_JSON_SCHEMA
     assert seen["body"]["stream"] is False and seen["body"]["messages"][1]["images"] == ["YWJj"]
     assert not provider.external and out.input_tokens == 50
+    # Ollama's default context (2048 tokens) would silently cut documents short; slow CPUs get a longer timeout.
+    assert seen["body"]["options"]["num_ctx"] == settings.local_llm_num_ctx
+    assert seen["body"]["options"]["num_predict"] <= settings.local_llm_max_output_tokens
+    assert provider.timeout == settings.local_llm_timeout_seconds
+
+
+def test_a_local_model_caps_the_document_text_for_every_provider():
+    from app.ai.service import input_limit
+
+    local = LocalProvider("http://ollama:11434", "m")
+    hosted = OpenAIProvider("k", "m", "https://x")
+    assert input_limit([hosted]) == settings.ai_max_input_chars
+    assert input_limit([local, hosted]) == min(settings.ai_max_input_chars, settings.local_llm_max_input_chars)
 
 
 @pytest.mark.parametrize("status,retryable", [(429, True), (500, True), (503, True), (408, True), (400, False), (401, False), (403, False)])

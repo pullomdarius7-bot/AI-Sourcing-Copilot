@@ -46,6 +46,10 @@ VPS > VNC), which does not depend on SSH.
   `LOCAL_LLM_URL=http://ollama:11434`, `AI_PROVIDER_ORDER=local,anthropic,openai` (no Anthropic/OpenAI key yet).
   Web search: self-hosted SearXNG (`SEARCH_PROVIDER=searxng`, `SEARXNG_URL=http://searxng:8080`). Health: both OK.
   Server has 7.8 GB RAM + 4 GB swap.
+  Two AI jobs failed on 2026-11-13 with "local request timed out" (CPU model slower than the 120 s / 300 s limits).
+  Fixed in code: local calls get LOCAL_LLM_TIMEOUT_SECONDS=900, LOCAL_LLM_NUM_CTX=16384, document text capped at
+  LOCAL_LLM_MAX_INPUT_CHARS=24000; on the server also set JOB_TIMEOUT_SECONDS=1800 and JOB_VISIBILITY_SECONDS=2400.
+- Some setup was done as `root` instead of `deploy`; check `find /opt/copilot/app -user root` is empty.
 - Not set up yet: mail relay (`SMTP_*`; mail is captured in mailpit), Stripe keys, AI keys, web search key,
   `INVITE_SENDER_POSTAL_ADDRESS` (supplier invitations are held).
 - Still to do: enable two-factor for the owner account, grant platform admin, send the link to the business partner.

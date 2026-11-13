@@ -127,7 +127,7 @@ class AIService:
         except gateway.PaymentRequired as exc:
             return AnalysisOutcome("skipped", reason=exc.message)
 
-        prepared = guard.prepare_text(text, settings.ai_max_input_chars)
+        prepared = guard.prepare_text(text, input_limit(providers))
         retryable_seen = False
         last_error = "no provider succeeded"
 
@@ -214,7 +214,7 @@ class AIService:
         providers = self.providers
         if not providers:
             raise PermanentError("No AI provider is configured")
-        prepared = guard.prepare_text(text, settings.ai_max_input_chars)
+        prepared = guard.prepare_text(text, input_limit(providers))
         retryable_seen = False
         last_error = "no provider succeeded"
 
@@ -272,6 +272,14 @@ class AIService:
 
 
 _service: AIService | None = None
+
+
+def input_limit(providers) -> int:
+    """How much document text one call may carry. With a model on the server's own CPU in the chain, the text is
+    capped to what that model can read in its context window; otherwise the normal limit applies."""
+    if any(p.name == "local" for p in providers):
+        return min(settings.ai_max_input_chars, settings.local_llm_max_input_chars)
+    return settings.ai_max_input_chars
 
 
 def get_ai_service() -> AIService:

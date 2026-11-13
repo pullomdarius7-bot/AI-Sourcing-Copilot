@@ -48,7 +48,7 @@ class LLMProvider:
 
     async def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         owns = self._client is None
-        client = self._client or httpx.AsyncClient(timeout=settings.ai_timeout_seconds)
+        client = self._client or httpx.AsyncClient(timeout=getattr(self, "timeout", None) or settings.ai_timeout_seconds)
         try:
             response = await client.post(url, headers=headers, json=body)
         except httpx.TimeoutException as exc:
@@ -184,6 +184,7 @@ class LocalProvider(LLMProvider):
     def __init__(self, base_url: str, model: str, client: httpx.AsyncClient | None = None):
         super().__init__(model, client)
         self.base_url = base_url.rstrip("/")
+        self.timeout = settings.local_llm_timeout_seconds
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         user: dict[str, Any] = {"role": "user", "content": request.user}
@@ -193,7 +194,11 @@ class LocalProvider(LLMProvider):
             "model": self.model,
             "stream": False,
             "format": request.schema,
-            "options": {"temperature": 0, "num_predict": request.max_tokens},
+            "options": {
+                "temperature": 0,
+                "num_ctx": settings.local_llm_num_ctx,
+                "num_predict": min(request.max_tokens, settings.local_llm_max_output_tokens),
+            },
             "messages": [{"role": "system", "content": request.system}, user],
         }
         data = await self._post(f"{self.base_url}/api/chat", {"content-type": "application/json"}, body)
