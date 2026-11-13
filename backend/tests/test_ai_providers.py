@@ -24,31 +24,81 @@ def client_for(handler):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-async def test_anthropic_forces_tool_use_and_parses_result():
+async def test_anthropic_asks_for_json_output_and_parses_it():
     seen = {}
 
     def handler(request):
         seen["url"], seen["headers"], seen["body"] = str(request.url), request.headers, json.loads(request.content)
         return httpx.Response(200, json={
-            "model": "claude-test", "stop_reason": "tool_use", "usage": {"input_tokens": 11, "output_tokens": 7},
-            "content": [{"type": "text", "text": "ok"}, {"type": "tool_use", "name": "record_analysis", "input": good_analysis()}],
+            "model": "claude-test", "stop_reason": "end_turn", "usage": {"input_tokens": 11, "output_tokens": 7},
+            "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": json.dumps(good_analysis())}],
         })
 
     provider = AnthropicProvider("sk-ant-secret", "claude-test", "https://api.anthropic.com", client_for(handler))
-    out = await provider.generate(LLMRequest("sys", "doc", ANALYSIS_JSON_SCHEMA, [("image/png", b"\x89PNG")]))
+    out = await provider.generate(REQ)
     assert seen["url"] == "https://api.anthropic.com/v1/messages"
     assert seen["headers"]["x-api-key"] == "sk-ant-secret" and seen["headers"]["anthropic-version"]
-    assert seen["body"]["tool_choice"] == {"type": "tool", "name": "record_analysis"}
-    assert seen["body"]["tools"][0]["input_schema"] == ANALYSIS_JSON_SCHEMA and seen["body"]["temperature"] == 0
-    assert seen["body"]["messages"][0]["content"][0]["type"] == "image"
-    assert (out.data["document_type"], out.model, out.input_tokens, out.output_tokens) == ("supplier_quote", "claude-test", 11, 7)
+    body = seen["body"]
+    # Current models reject a forced tool call and non-default sampling parameters.
+    assert not {"tool_choice", "tools", "temperature", "top_p", "top_k"} & set(body)
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert body["output_config"]["effort"] == settings.anthropic_effort
+    assert out.data == good_analysis() and out.input_tokens == 11 and out.output_tokens == 7
 
 
-async def test_anthropic_without_tool_use_is_retryable():
+def test_json_output_schema_keeps_the_shape_and_drops_what_the_api_rejects():
+    from app.ai.providers import json_output_schema
+
+    source = {
+        "type": "object", "required": ["name", "items"],
+        "properties": {
+            "name": {"type": ["string", "null"], "maxLength": 50},
+            "maxItems": {"type": "number", "minimum": 0},  # a property that happens to be named like a keyword
+            "items": {"type": "array", "maxItems": 5, "items": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+        },
+    }
+    out = json_output_schema(source)
+    assert out["additionalProperties"] is False and out["required"] == ["name", "items"]
+    assert out["properties"]["name"] == {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    assert out["properties"]["maxItems"] == {"type": "number"}
+    assert out["properties"]["items"] == {
+        "type": "array", "items": {"type": "object", "properties": {"n": {"type": "integer"}}, "additionalProperties": False}}
+    assert "maxLength" in json.dumps(source)  # the caller's schema is not modified
+
+    def keywords(node, found):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                found.add(key)
+                keywords(list(value.values()) if key == "properties" else value, found)
+        elif isinstance(node, list):
+            for item in node:
+                keywords(item, found)
+        return found
+
+    from app.agent.prompts import ANSWER_SCHEMA, PLAN_SCHEMA
+    from app.marketplace.manifest import NORMALIZE_SCHEMA, PDF_SCHEMA
+    from app.marketplace.service import VALUATION_SCHEMA
+    from app.requirements.schemas import EXTRACTION_JSON_SCHEMA
+    from app.sourcing import extract
+
+    allowed = {"type", "properties", "required", "additionalProperties", "items", "enum", "anyOf", "description"}
+    for schema in (ANALYSIS_JSON_SCHEMA, EXTRACTION_JSON_SCHEMA, NORMALIZE_SCHEMA, PDF_SCHEMA, VALUATION_SCHEMA,
+                   PLAN_SCHEMA, ANSWER_SCHEMA, extract.SCHEMA):
+        assert keywords(json_output_schema(schema), set()) <= allowed
+
+
+async def test_anthropic_without_json_is_retryable():
     provider = AnthropicProvider("k", "m", "https://x", client_for(lambda r: httpx.Response(200, json={"content": [{"type": "text", "text": "hi"}]})))
     with pytest.raises(ProviderError) as err:
         await provider.generate(REQ)
     assert err.value.retryable
+
+
+async def test_anthropic_refusal_is_not_retried():
+    provider = AnthropicProvider("k", "m", "https://x", client_for(lambda r: httpx.Response(200, json={"stop_reason": "refusal", "content": []})))
+    with pytest.raises(ProviderError) as err:
+        await provider.generate(REQ)
+    assert not err.value.retryable and "declined" in str(err.value)
 
 
 async def test_anthropic_truncated_output_is_not_retried():

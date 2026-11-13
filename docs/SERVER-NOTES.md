@@ -75,6 +75,13 @@ limit in the console; check its expiry date there) and `AI_PROVIDER_ORDER=anthro
 the slow local model. Five old jobs failed from the timeouts; retry them in Back office > Jobs.
 Secrets are entered with the `read -rsp` line below: run it unchanged, then paste at the `Key:` prompt.
 
+**Update 2026-11-13 (night):** with the key set, every Anthropic call failed with HTTP 400
+(`tool_choice: type "tool" and "any" are not supported for this model`), so the app kept falling back to the slow
+local model. Cause: `claude-sonnet-5-5` rejects forced tool calls and `temperature`. Fixed in code: the Anthropic
+provider now uses JSON outputs (`output_config.format`) and sends `ANTHROPIC_EFFORT` (default `medium`). Not yet
+verified against the live API (no key in the build sandbox): after deploying, check with
+`select provider, status, left(error,140) from ai_audit_logs order by id desc limit 5;` in the `db` container.
+
 ## Next steps, in order
 
 1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):

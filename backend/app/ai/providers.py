@@ -94,34 +94,70 @@ class AnthropicProvider(LLMProvider):
             for mime, data in request.images
         ]
         content.append({"type": "text", "text": request.user})
+        # JSON outputs: the reply is guaranteed to match the schema. Current models reject the older ways of
+        # getting this (a forced tool call) and non-default sampling parameters, so neither is sent.
         body = {
             "model": self.model,
             "max_tokens": request.max_tokens,
-            "temperature": 0,
             "system": request.system,
             "messages": [{"role": "user", "content": content}],
-            "tools": [{
-                "name": request.schema_name,
-                "description": "Record the structured result for the document.",
-                "input_schema": request.schema,
-            }],
-            "tool_choice": {"type": "tool", "name": request.schema_name},
+            "output_config": {
+                "effort": settings.anthropic_effort,
+                "format": {"type": "json_schema", "schema": json_output_schema(request.schema)},
+            },
         }
         data = await self._post(
             f"{self.base_url}/v1/messages",
             {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
             body,
         )
+        if data.get("stop_reason") == "refusal":
+            raise ProviderError("anthropic declined the request", retryable=False)
         if data.get("stop_reason") == "max_tokens":
             raise ProviderError("anthropic output was truncated", retryable=False)
+        import json
+
         for block in data.get("content", []):
-            if block.get("type") == "tool_use" and block.get("name") == request.schema_name:
+            if block.get("type") == "text" and block.get("text", "").strip():
+                try:
+                    parsed = json.loads(block["text"])
+                except ValueError as exc:
+                    raise ProviderError("anthropic returned invalid JSON", retryable=True) from exc
                 usage = data.get("usage", {})
                 return LLMResponse(
-                    block.get("input"), data.get("model", self.model),
-                    usage.get("input_tokens"), usage.get("output_tokens"),
+                    parsed, data.get("model", self.model), usage.get("input_tokens"), usage.get("output_tokens")
                 )
         raise ProviderError("anthropic returned no structured output", retryable=True)
+
+
+# Keywords JSON outputs do not accept; the caller validates the reply against the full schema afterwards.
+_UNSUPPORTED = frozenset({
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "pattern",
+    "minItems", "maxItems", "uniqueItems",
+})
+
+
+def json_output_schema(schema: Any) -> Any:
+    """The schema in the subset JSON outputs accept: unsupported constraints dropped, every object closed, and
+    `"type": ["string", "null"]` written as anyOf."""
+    if isinstance(schema, list):
+        return [json_output_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _UNSUPPORTED:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: json_output_schema(sub) for name, sub in value.items()}
+        else:
+            out[key] = json_output_schema(value)
+    if out.get("type") == "object":
+        out["additionalProperties"] = False
+    if isinstance(out.get("type"), list):
+        types = out.pop("type")
+        return {"anyOf": [{**out, "type": t} if t != "null" else {"type": "null"} for t in types]}
+    return out
 
 
 class OpenAIProvider(LLMProvider):

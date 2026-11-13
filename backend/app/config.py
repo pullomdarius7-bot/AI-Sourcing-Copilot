@@ -136,6 +136,7 @@ class Settings(BaseSettings):
     ai_max_input_chars: int = 60_000
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5-5"
+    anthropic_effort: str = "medium"  # low | medium | high | xhigh | max: how hard the model works per call
     anthropic_base_url: str = "https://api.anthropic.com"
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"

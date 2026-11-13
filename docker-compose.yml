@@ -52,6 +52,7 @@ x-backend-env: &backend-env
   AI_PROVIDER_ORDER: ${AI_PROVIDER_ORDER:-local,anthropic,openai}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+  ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-medium}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
