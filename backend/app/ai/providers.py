@@ -94,18 +94,31 @@ class AnthropicProvider(LLMProvider):
             for mime, data in request.images
         ]
         content.append({"type": "text", "text": request.user})
-        # JSON outputs: the reply is guaranteed to match the schema. Current models reject the older ways of
-        # getting this (a forced tool call) and non-default sampling parameters, so neither is sent.
-        body = {
+        body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": request.max_tokens,
             "system": request.system,
             "messages": [{"role": "user", "content": content}],
-            "output_config": {
-                "effort": settings.anthropic_effort,
-                "format": {"type": "json_schema", "schema": json_output_schema(request.schema)},
-            },
+            "output_config": {"effort": settings.anthropic_effort},
         }
+        # Current models reject a forced tool call and non-default sampling parameters, so neither is sent.
+        strict = json_output_schema(request.schema)
+        if union_count(strict) <= MAX_STRICT_UNIONS:
+            # JSON outputs: the reply is guaranteed to match the schema.
+            body["output_config"]["format"] = {"type": "json_schema", "schema": strict}
+        else:
+            # Too many optional fields for the API to compile strictly: ask for the one tool instead. The reply is
+            # validated against the full schema by the caller, exactly as for every other provider.
+            body["system"] = (
+                f"{request.system}\n\nRecord your result by calling the {request.schema_name} tool exactly once. "
+                "Do not answer in plain text."
+            )
+            body["tools"] = [{
+                "name": request.schema_name,
+                "description": "Record the structured result for the document.",
+                "input_schema": request.schema,
+            }]
+            body["tool_choice"] = {"type": "auto"}
         data = await self._post(
             f"{self.base_url}/v1/messages",
             {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
@@ -117,17 +130,35 @@ class AnthropicProvider(LLMProvider):
             raise ProviderError("anthropic output was truncated", retryable=False)
         import json
 
-        for block in data.get("content", []):
+        usage = data.get("usage", {})
+
+        def answer(parsed: Any) -> LLMResponse:
+            return LLMResponse(parsed, data.get("model", self.model), usage.get("input_tokens"), usage.get("output_tokens"))
+
+        blocks = data.get("content", [])
+        for block in blocks:
+            if block.get("type") == "tool_use" and block.get("name") == request.schema_name:
+                return answer(block.get("input"))
+        for block in blocks:
             if block.get("type") == "text" and block.get("text", "").strip():
                 try:
-                    parsed = json.loads(block["text"])
+                    return answer(json.loads(block["text"]))
                 except ValueError as exc:
                     raise ProviderError("anthropic returned invalid JSON", retryable=True) from exc
-                usage = data.get("usage", {})
-                return LLMResponse(
-                    parsed, data.get("model", self.model), usage.get("input_tokens"), usage.get("output_tokens")
-                )
         raise ProviderError("anthropic returned no structured output", retryable=True)
+
+
+# The API refuses to compile a strict schema with more fields than this that can be one of several types
+# ("too many parameters with union types"); such schemas go through a tool call instead.
+MAX_STRICT_UNIONS = 16
+
+
+def union_count(schema: Any) -> int:
+    if isinstance(schema, dict):
+        return (1 if "anyOf" in schema else 0) + sum(union_count(v) for v in schema.values())
+    if isinstance(schema, list):
+        return sum(union_count(item) for item in schema)
+    return 0
 
 
 # Keywords JSON outputs do not accept; the caller validates the reply against the full schema afterwards.

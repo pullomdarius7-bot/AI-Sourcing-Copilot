@@ -24,6 +24,12 @@ def client_for(handler):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+SMALL_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["name", "kind"],
+    "properties": {"name": {"type": ["string", "null"]}, "kind": {"type": "string", "enum": ["a", "b"]}},
+}
+
+
 async def test_anthropic_asks_for_json_output_and_parses_it():
     seen = {}
 
@@ -31,11 +37,11 @@ async def test_anthropic_asks_for_json_output_and_parses_it():
         seen["url"], seen["headers"], seen["body"] = str(request.url), request.headers, json.loads(request.content)
         return httpx.Response(200, json={
             "model": "claude-test", "stop_reason": "end_turn", "usage": {"input_tokens": 11, "output_tokens": 7},
-            "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": json.dumps(good_analysis())}],
+            "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": json.dumps({"name": None, "kind": "a"})}],
         })
 
     provider = AnthropicProvider("sk-ant-secret", "claude-test", "https://api.anthropic.com", client_for(handler))
-    out = await provider.generate(REQ)
+    out = await provider.generate(LLMRequest("sys", "doc", SMALL_SCHEMA, schema_name="record_thing"))
     assert seen["url"] == "https://api.anthropic.com/v1/messages"
     assert seen["headers"]["x-api-key"] == "sk-ant-secret" and seen["headers"]["anthropic-version"]
     body = seen["body"]
@@ -43,7 +49,48 @@ async def test_anthropic_asks_for_json_output_and_parses_it():
     assert not {"tool_choice", "tools", "temperature", "top_p", "top_k"} & set(body)
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert body["output_config"]["effort"] == settings.anthropic_effort
-    assert out.data == good_analysis() and out.input_tokens == 11 and out.output_tokens == 7
+    assert out.data == {"name": None, "kind": "a"} and out.input_tokens == 11 and out.output_tokens == 7
+
+
+async def test_a_schema_too_complex_to_compile_goes_through_a_tool_call():
+    """The API caps strict schemas at 16 fields of several types; document analysis has more."""
+    from app.ai.providers import MAX_STRICT_UNIONS, json_output_schema, union_count
+
+    assert union_count(json_output_schema(ANALYSIS_JSON_SCHEMA)) > MAX_STRICT_UNIONS
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "model": "claude-test", "stop_reason": "tool_use", "usage": {"input_tokens": 5, "output_tokens": 9},
+            "content": [{"type": "text", "text": "Recording."},
+                        {"type": "tool_use", "id": "t1", "name": "record_analysis", "input": good_analysis()}],
+        })
+
+    provider = AnthropicProvider("k", "claude-test", "https://x", client_for(handler))
+    out = await provider.generate(REQ)
+    body = seen["body"]
+    assert body["tool_choice"] == {"type": "auto"}  # forced tool choice is rejected by current models
+    assert body["tools"][0]["name"] == "record_analysis" and body["tools"][0]["input_schema"] == ANALYSIS_JSON_SCHEMA
+    assert "format" not in body["output_config"] and "record_analysis tool" in body["system"]
+    assert "temperature" not in body
+    assert out.data == good_analysis()
+
+
+def test_every_schema_in_the_app_either_compiles_strictly_or_uses_the_tool_path():
+    from app.agent.prompts import ANSWER_SCHEMA, PLAN_SCHEMA
+    from app.ai.providers import MAX_STRICT_UNIONS, json_output_schema, union_count
+    from app.marketplace.manifest import NORMALIZE_SCHEMA, PDF_SCHEMA
+    from app.marketplace.service import VALUATION_SCHEMA
+    from app.requirements.schemas import EXTRACTION_JSON_SCHEMA
+    from app.sourcing import extract
+
+    strict = {name for name, schema in {
+        "extraction": EXTRACTION_JSON_SCHEMA, "normalize": NORMALIZE_SCHEMA, "pdf": PDF_SCHEMA,
+        "valuation": VALUATION_SCHEMA, "plan": PLAN_SCHEMA, "answer": ANSWER_SCHEMA, "supplier": extract.SCHEMA,
+        "analysis": ANALYSIS_JSON_SCHEMA,
+    }.items() if union_count(json_output_schema(schema)) <= MAX_STRICT_UNIONS}
+    assert strict == {"extraction", "normalize", "pdf", "valuation", "plan", "answer", "supplier"}
 
 
 def test_json_output_schema_keeps_the_shape_and_drops_what_the_api_rejects():
