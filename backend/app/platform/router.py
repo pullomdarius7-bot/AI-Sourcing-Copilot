@@ -276,7 +276,7 @@ async def lift_suppression(body: SuppressionLift, p: Principal = Depends(require
 
 # --- Jobs -----------------------------------------------------------------------------------------------------------
 @router.get("/jobs")
-async def jobs(status: str | None = Query(None, pattern="^(queued|running|succeeded|dead)$"),
+async def jobs(status: str | None = Query(None, pattern="^(queued|running|succeeded|dead|cancelled)$"),
                kind: str | None = Query(None, max_length=60), limit: int = Query(50, ge=1, le=200),
                offset: int = Query(0, ge=0),
                _: Principal = Depends(require_platform_admin), db: AsyncSession = Depends(get_db)):
@@ -299,8 +299,8 @@ async def retry_job(job_id: uuid.UUID, body: Reason, p: Principal = Depends(requ
     job = await db.get(Job, job_id, with_for_update=True)
     if job is None:
         raise not_found("Job not found")
-    if job.status != "dead":
-        raise conflict("not_dead", "Only failed (dead) jobs can be retried")
+    if job.status not in queue.RETRYABLE:
+        raise conflict("not_dead", "Only failed or stopped jobs can be retried")
     if job.dedupe_key and await db.scalar(select(Job.id).where(
             Job.dedupe_key == job.dedupe_key, Job.status.in_(("queued", "running")))):
         raise conflict("already_active", "An identical job is already queued")
@@ -315,6 +315,29 @@ async def retry_job(job_id: uuid.UUID, body: Reason, p: Principal = Depends(requ
     _audit(db, p, "job.retried", "job", job_id, kind=job.kind, organization_id=str(job.organization_id), note=body.note)
     await db.commit()
     return {"id": job.id, "status": job.status}
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: uuid.UUID, body: Reason, p: Principal = Depends(require_platform_admin),
+                     db: AsyncSession = Depends(get_db)):
+    """Stop any account's queued or running job. The customer sees "Stopped by the platform team"."""
+    from app.db import set_tenant
+    from app.jobs import control
+
+    job = await db.get(Job, job_id, with_for_update=True)
+    if job is None:
+        raise not_found("Job not found")
+    if job.status not in queue.STOPPABLE:
+        raise conflict("not_running", "Only queued or running jobs can be stopped")
+    previous = queue.cancel(job, "Stopped by the platform team")
+    _audit(db, p, "job.cancelled", "job", job_id, kind=job.kind, organization_id=str(job.organization_id),
+           was=previous, note=body.note)
+    await db.commit()
+    out = {"id": job.id, "status": job.status}
+    if previous == "queued":
+        await set_tenant(db, job.organization_id)
+        await control.after_stop(db, job, job.last_error or "Stopped")
+    return out
 
 
 # --- Audit ----------------------------------------------------------------------------------------------------------

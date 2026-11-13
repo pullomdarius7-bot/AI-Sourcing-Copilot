@@ -266,15 +266,20 @@ function JobsTab() {
         <option value="queued">Queued</option>
         <option value="running">Running</option>
         <option value="succeeded">Succeeded</option>
+        <option value="cancelled">Stopped</option>
         <option value="">All</option>
       </Select>
       <ul className="divide-y rounded-md border bg-card text-sm">
         {jobs.data?.map((j) => (
           <li key={j.id} className="flex flex-wrap items-center gap-2 px-4 py-2">
             <span className="font-mono text-xs">{j.kind}</span>
-            <Badge variant={j.status === "dead" ? "destructive" : "neutral"}>{j.status}</Badge>
+            <Badge variant={j.status === "dead" ? "destructive" : "neutral"}>{j.status === "cancelled" ? "stopped" : j.status}</Badge>
             <span className="text-muted-foreground">{j.organization_name} · {j.attempts} attempt(s) · {formatDate(j.created_at)}</span>
-            {j.status === "dead" && (
+            {(j.status === "queued" || j.status === "running") && (
+              <Button size="sm" variant="outline" className="ml-auto" onClick={() => run(`platform/jobs/${j.id}/cancel`, {},
+                `Stop ${j.kind} for ${j.organization_name}? The customer sees "Stopped by the platform team".`, "Job stopped")}>Stop</Button>
+            )}
+            {(j.status === "dead" || j.status === "cancelled") && (
               <Button size="sm" variant="outline" className="ml-auto" onClick={() => run(`platform/jobs/${j.id}/retry`, {}, `Retry ${j.kind}?`, "Job queued again")}>Retry</Button>
             )}
             {j.last_error && <p className="w-full truncate text-xs text-destructive">{j.last_error}</p>}

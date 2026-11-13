@@ -82,6 +82,12 @@ provider now uses JSON outputs (`output_config.format`) and sends `ANTHROPIC_EFF
 verified against the live API (no key in the build sandbox): after deploying, check with
 `select provider, status, left(error,140) from ai_audit_logs order by id desc limit 5;` in the `db` container.
 
+**Stop button (2026-11-13):** queued or running jobs can be stopped from **Jobs** (needs the jobs:manage
+permission) and from **Back office > Jobs**. A running job stops within about 3 seconds
+(`JOB_CANCEL_POLL_SECONDS`), credits it still held are refunded, and its document or extraction is marked
+stopped. Retry starts a stopped job again from the beginning (Stop + Retry is the pause/resume). Needs migration
+`0016`, which runs automatically on deploy.
+
 ## Next steps, in order
 
 1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):

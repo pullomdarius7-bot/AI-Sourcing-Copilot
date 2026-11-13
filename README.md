@@ -555,7 +555,7 @@ With `PLATFORM_ADMIN_REQUIRES_MFA=true` (the default) platform admins must turn 
 | Accounts | Search by business name, user email or Stripe customer id; see users, plan and credit history; add or remove credits, extend a trial, deactivate a user (signs them out everywhere) |
 | Invitations | Every web-found supplier with its real identity (never shown to buyers); resend now (skips the cooldown and daily cap, never an opt-out) or hold |
 | Opt-outs | Unsubscribed addresses and domains; lift one at the business's written request |
-| Jobs | Background jobs across all accounts; retry failed ones |
+| Jobs | Background jobs across all accounts; stop queued or running ones (credits still held are refunded), retry failed or stopped ones |
 | Audit | Every back-office action with the admin, time and the reason they gave |
 
 Every change asks for a reason and is written to `platform_audit`, which only the system can read or write

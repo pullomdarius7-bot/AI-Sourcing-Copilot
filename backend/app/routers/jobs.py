@@ -9,7 +9,7 @@ from app.audit import record
 from app.db import get_db
 from app.deps import Principal, require_permission
 from app.errors import conflict, not_found
-from app.jobs import queue
+from app.jobs import control, queue
 from app.jobs.handlers import ANALYZE, EXTRACT, SCAN
 from app.models import AiAuditLog, Document, Job
 from app.rbac import Permission
@@ -23,7 +23,7 @@ _RESTORE_STATUS = {SCAN: "uploaded", EXTRACT: "extracting", ANALYZE: "analyzing"
 
 @router.get("/jobs", response_model=list[JobOut])
 async def list_jobs(
-    status: str | None = Query(None, pattern="^(queued|running|succeeded|dead)$"),
+    status: str | None = Query(None, pattern="^(queued|running|succeeded|dead|cancelled)$"),
     kind: str | None = Query(None, max_length=60),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -55,8 +55,8 @@ async def retry_job(
     job = await db.scalar(select(Job).where(Job.id == job_id, Job.organization_id == p.org_id).with_for_update())
     if job is None:
         raise not_found("Job not found")
-    if job.status != "dead":
-        raise conflict("not_dead", "Only dead-lettered jobs can be retried")
+    if job.status not in queue.RETRYABLE:
+        raise conflict("not_dead", "Only failed or stopped jobs can be retried")
     clash = None
     if job.dedupe_key:
         clash = await db.scalar(
@@ -74,6 +74,28 @@ async def retry_job(
                 doc.analysis_status = "pending"
     record(db, org_id=p.org_id, user_id=p.user.id, action="job.retried", ip=p.ip, meta={"job_id": str(job.id), "kind": job.kind})
     await db.commit()
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobOut)
+async def cancel_job(
+    job_id: uuid.UUID,
+    p: Principal = Depends(require_permission(Permission.JOBS_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop a queued or running job. A running one stops within a few seconds; Retry starts it again."""
+    job = await db.scalar(select(Job).where(Job.id == job_id, Job.organization_id == p.org_id).with_for_update())
+    if job is None:
+        raise not_found("Job not found")
+    if job.status not in queue.STOPPABLE:
+        raise conflict("not_running", "Only queued or running jobs can be stopped")
+    previous = queue.cancel(job, f"Stopped by {p.user.full_name}")
+    record(db, org_id=p.org_id, user_id=p.user.id, action="job.cancelled", ip=p.ip,
+           meta={"job_id": str(job.id), "kind": job.kind, "was": previous})
+    await db.commit()
+    if previous == "queued":
+        await control.after_stop(db, job, job.last_error or "Stopped")
+    await db.refresh(job)
     return job
 
 

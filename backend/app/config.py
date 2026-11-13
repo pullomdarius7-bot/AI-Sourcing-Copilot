@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     job_poll_interval_seconds: float = 1.0
     job_timeout_seconds: int = 300
     job_visibility_seconds: int = 600
+    job_cancel_poll_seconds: float = 3.0  # how soon a running job notices it was stopped
     job_max_attempts: int = 5
     job_backoff_base_seconds: float = 5.0
     job_backoff_max_seconds: float = 900.0

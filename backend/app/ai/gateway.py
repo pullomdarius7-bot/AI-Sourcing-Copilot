@@ -114,6 +114,19 @@ async def settle(db: AsyncSession, permit: Permit) -> None:
         entry.state = "settled"
 
 
+async def release_held(db: AsyncSession, org_id: uuid.UUID, subject_ids: list[uuid.UUID]) -> int:
+    """Refund every charge still held for these records (a job was stopped mid-call). Caller commits."""
+    if not subject_ids:
+        return 0
+    held = (await db.scalars(select(CreditTransaction).where(
+        CreditTransaction.organization_id == org_id, CreditTransaction.state == "held",
+        CreditTransaction.subject_id.in_(subject_ids),
+    ))).all()
+    for entry in held:
+        await release(db, Permit(org_id, entry.action or "", entry.subject_id, -entry.delta, entry.id), commit=False)
+    return len(held)
+
+
 async def release(db: AsyncSession, permit: Permit, *, commit: bool = True) -> None:
     """The work failed: give the credits back. Safe to call twice."""
     permit.closed = True

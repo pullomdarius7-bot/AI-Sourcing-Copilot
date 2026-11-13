@@ -296,6 +296,7 @@ class JobStatsOut(BaseModel):
     running: int
     succeeded: int
     dead: int
+    cancelled: int = 0
     oldest_queued_age_seconds: int | None
     succeeded_last_hour: int
     avg_duration_ms_last_hour: int | None

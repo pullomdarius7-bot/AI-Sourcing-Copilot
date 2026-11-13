@@ -121,7 +121,7 @@ export interface AuditEntry {
 export interface JobBrief {
   id: string;
   kind: string;
-  status: "queued" | "running" | "succeeded" | "dead";
+  status: "queued" | "running" | "succeeded" | "dead" | "cancelled";
   attempts: number;
   max_attempts: number;
   run_at: string;
@@ -201,6 +201,7 @@ export interface JobStats {
   running: number;
   succeeded: number;
   dead: number;
+  cancelled: number;
   oldest_queued_age_seconds: number | null;
   succeeded_last_hour: number;
   avg_duration_ms_last_hour: number | null;
