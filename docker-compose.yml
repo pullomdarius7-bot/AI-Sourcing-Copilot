@@ -20,6 +20,8 @@ x-backend-env: &backend-env
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-auto}
   STORAGE_LOCAL_DIR: /data/uploads
+  # On the volume the API and worker share, so the back office health check sees the worker's heartbeat
+  WORKER_HEARTBEAT_FILE: /data/uploads/.worker-heartbeat
   MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-copilot-minio}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?run ./scripts/init-env.sh first}
