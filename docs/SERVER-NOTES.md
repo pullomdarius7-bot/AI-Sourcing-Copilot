@@ -88,6 +88,13 @@ permission) and from **Back office > Jobs**. A running job stops within about 3 
 stopped. Retry starts a stopped job again from the beginning (Stop + Retry is the pause/resume). Needs migration
 `0016`, which runs automatically on deploy.
 
+**Solo approvals and complimentary accounts (2026-11-14):**
+- Separation of duties (a second person approves) now applies only when the account has more than one active
+  user. A one-person account approves its own extractions, suppliers, RFQs and awards.
+- Complimentary accounts use AI with no credits, plan, trial or seat limit. Set the owner's own account with
+  `docker compose exec backend python -m app.ops comp-account YOUR@EMAIL`, or in Back office > Accounts >
+  Make complimentary. Undo with `uncomp-account`. Migration `0017` adds the flag.
+
 ## Next steps, in order
 
 1. Deploy the fix and retry the jobs (as `deploy` in `/opt/copilot/app`):

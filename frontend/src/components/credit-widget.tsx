@@ -14,6 +14,15 @@ export function trialDaysLeft(me: Me): number | null {
 
 /** Header widget: remaining credits, trial countdown, and the way to get more. */
 export function CreditWidget({ me }: { me: Me }) {
+  if (me.billing_exempt) {
+    return (
+      <div className="mr-auto flex items-center gap-2 rounded-md border bg-background px-3 py-1.5 text-sm">
+        <Coins className="h-4 w-4" aria-hidden />
+        <span className="font-semibold">Complimentary</span>
+        <span className="hidden text-muted-foreground sm:inline">AI is free on this account</span>
+      </div>
+    );
+  }
   const days = trialDaysLeft(me);
   const low = me.credit_balance <= LOW_CREDITS || !me.ai_access;
   return (
@@ -44,6 +53,7 @@ export function CreditWidget({ me }: { me: Me }) {
 
 /** Persistent banner across the app when credits are nearly gone or AI is paused. */
 export function CreditBanner({ me }: { me: Me }) {
+  if (me.billing_exempt) return null;
   let message: string | null = null;
   if (me.subscription_status === "past_due") {
     message = "Your last payment failed, so AI analysis is paused. Update your payment method to resume.";

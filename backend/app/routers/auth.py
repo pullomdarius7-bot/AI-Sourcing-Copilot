@@ -176,6 +176,7 @@ async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(g
         plan=p.org.plan,
         subscription_status=p.org.subscription_status,
         ai_access=access_problem(p.org) is None,
+        billing_exempt=p.org.billing_exempt,
         permissions=permissions_for(p.user.role),
     )
 

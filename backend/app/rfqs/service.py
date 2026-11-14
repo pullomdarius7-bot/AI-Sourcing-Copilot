@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis import ingest
 from app.analysis import service as analysis_svc
+from app.approvals import second_person_required
 from app.config import get_settings
 from app.deps import Principal
 from app.errors import ApiError, bad_request, conflict, forbidden, not_found
@@ -383,7 +384,7 @@ async def submit(db: AsyncSession, p: Principal, rfq: Rfq) -> Rfq:
 async def approve(db: AsyncSession, p: Principal, rfq: Rfq, note: str | None) -> Rfq:
     if rfq.status != "pending_approval":
         raise conflict("invalid_state", "Only RFQs pending approval can be approved")
-    if settings.require_separate_approver and p.user.id in (rfq.created_by, rfq.submitted_by):
+    if p.user.id in (rfq.created_by, rfq.submitted_by) and await second_person_required(db, p.org_id):
         raise forbidden("The approver must not be the person who created or submitted the RFQ", "segregation_of_duties")
     if await current_hash(db, rfq) != rfq.content_sha256:
         raise conflict("content_changed", "The RFQ changed after it was submitted. Return it to draft and submit again.")
@@ -914,9 +915,10 @@ async def approve_recommendation(db: AsyncSession, p: Principal, rec_id: uuid.UU
     rec, rfq = await _recommendation(db, p, rec_id, lock=True)
     if rec.status != "pending":
         raise conflict("invalid_state", f"This recommendation is already {rec.status}")
-    if rec.submitted_by == p.user.id:
+    solo = not await second_person_required(db, p.org_id)
+    if rec.submitted_by == p.user.id and not solo:
         raise forbidden("The person who recommended the award cannot also approve it", "segregation_of_duties")
-    if settings.require_separate_approver and p.user.id == rfq.created_by:
+    if p.user.id == rfq.created_by and not solo:
         raise forbidden("The person who created the RFQ cannot also approve its award", "segregation_of_duties")
     if rfq.status not in ("sent", "closed"):
         raise conflict("invalid_state", f"The RFQ is {rfq.status} and can no longer be awarded")

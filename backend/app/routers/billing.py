@@ -74,6 +74,7 @@ class BillingOut(BaseModel):
     current_period_end: datetime | None
     ai_access: bool
     ai_access_reason: str | None
+    billing_exempt: bool = False
     can_manage: bool
     has_billing_profile: bool
     checkout_trial_days: int | None
@@ -125,7 +126,7 @@ async def summary(p: Principal = Depends(require_permission(Permission.ORG_READ)
     return BillingOut(
         plan=p.org.plan, subscription_status=p.org.subscription_status, credit_balance=p.org.credit_balance,
         trial_ends_at=p.org.trial_ends_at, current_period_end=p.org.current_period_end,
-        ai_access=reason is None, ai_access_reason=reason,
+        ai_access=reason is None, ai_access_reason=reason, billing_exempt=p.org.billing_exempt,
         can_manage=has_permission(p.user.role, Permission.BILLING_MANAGE),
         has_billing_profile=p.org.stripe_customer_id is not None,
         checkout_trial_days=service.checkout_trial_days(p.org),

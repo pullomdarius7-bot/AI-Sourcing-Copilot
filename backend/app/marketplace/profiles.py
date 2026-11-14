@@ -98,7 +98,7 @@ async def refresh(db: AsyncSession, org_id: uuid.UUID, *, restore_org: uuid.UUID
             db.add(profile)
         profile.side, profile.label, profile.hub_region = side, label, hub
         profile.alias = alias_for(org_id, side)
-        profile.verified = org.subscription_status in ("active", "trialing")
+        profile.verified = org.billing_exempt or org.subscription_status in ("active", "trialing")
         profile.completed_deals = int(deals)
         profile.updated_at = datetime.now(UTC)
         await db.flush()

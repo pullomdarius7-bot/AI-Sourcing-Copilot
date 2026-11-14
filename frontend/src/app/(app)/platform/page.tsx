@@ -18,6 +18,7 @@ type Overview = Record<string, number | Record<string, number>>;
 type Org = {
   id: string; name: string; account_type: string; plan: string | null; subscription_status: string; credit_balance: number;
   trial_ends_at: string | null; created_at: string; users?: number; signup_promo: string | null; stripe_customer_id: string | null;
+  billing_exempt?: boolean;
 };
 type OrgDetail = Org & {
   users: { id: string; email: string; full_name: string; role: string; is_active: boolean; mfa_enabled: boolean; last_login_at: string | null }[];
@@ -111,7 +112,7 @@ function OrgPanel({ id, onClose }: { id: string; onClose: () => void }) {
         <div>
           <CardTitle>{d.name}</CardTitle>
           <CardDescription>
-            {d.account_type} · {d.plan ?? "no plan"} ({d.subscription_status}) · {d.credit_balance} credits
+            {d.account_type} · {d.billing_exempt ? "complimentary" : `${d.plan ?? "no plan"} (${d.subscription_status})`} · {d.credit_balance} credits
             {d.trial_ends_at && ` · trial ends ${formatDate(d.trial_ends_at)}`}{d.stripe_customer_id && ` · Stripe ${d.stripe_customer_id}`}
           </CardDescription>
         </div>
@@ -128,6 +129,11 @@ function OrgPanel({ id, onClose }: { id: string; onClose: () => void }) {
             `Change ${d.name}'s balance by ${delta} credits?`, "Credits updated")}>Apply</Button>
           <Button size="sm" variant="outline" onClick={() => run(`platform/organizations/${id}/extend-trial`, { days: 7 },
             `Extend ${d.name}'s free trial by 7 days?`, "Trial extended by 7 days")}>Extend trial 7 days</Button>
+          <Button size="sm" variant="outline" onClick={() => run(`platform/organizations/${id}/complimentary`, { exempt: !d.billing_exempt },
+            d.billing_exempt ? `Make ${d.name} pay normally again?` : `Make ${d.name} complimentary (free, unlimited AI)?`,
+            d.billing_exempt ? "Account pays normally again" : "Account is now complimentary")}>
+            {d.billing_exempt ? "Remove complimentary" : "Make complimentary"}
+          </Button>
         </div>
         <div>
           <p className="mb-1 text-sm font-medium">Users</p>

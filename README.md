@@ -545,6 +545,7 @@ only from the server's command line, never through the website:
     python -m app.ops grant-platform-admin you@example.com      # Docker: docker compose exec backend python -m app.ops ...
     python -m app.ops revoke-platform-admin someone@example.com
     python -m app.ops list-platform-admins
+    python -m app.ops comp-account you@example.com              # this user's account: free, unlimited AI
     python -m app.ops health                                    # the same health checks, in the terminal
 
 With `PLATFORM_ADMIN_REQUIRES_MFA=true` (the default) platform admins must turn on two-factor sign-in first.

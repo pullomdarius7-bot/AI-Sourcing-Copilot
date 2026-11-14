@@ -69,6 +69,8 @@ class Organization(Base):
     analysis_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     # invite_first_month: joined through a supplier invitation, first month discounted | used
     signup_promo: Mapped[str | None] = mapped_column(String(24))
+    # Complimentary: AI without credits or a plan (the platform owner's accounts). Set by the platform only.
+    billing_exempt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(64))

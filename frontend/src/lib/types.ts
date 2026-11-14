@@ -13,6 +13,7 @@ export interface Billing {
   current_period_end: string | null;
   ai_access: boolean;
   ai_access_reason: string | null;
+  billing_exempt?: boolean;
   can_manage: boolean;
   has_billing_profile: boolean;
   checkout_trial_days: number | null;
@@ -58,6 +59,7 @@ export interface OnboardingState {
 
 export interface Me {
   id: string;
+  billing_exempt?: boolean;
   is_platform_admin?: boolean;
   organization_id: string;
   organization_name: string;

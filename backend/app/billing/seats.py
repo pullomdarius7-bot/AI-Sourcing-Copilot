@@ -15,6 +15,8 @@ settings = get_settings()
 def seat_limit(org: Organization) -> int | None:
     """The plan's seats while subscribed; before that 1 for a solo account and trial_seats for a team.
     None means no limit."""
+    if org.billing_exempt:
+        return None
     plan = PLANS.get(org.plan or "") if org.subscription_status in ("trialing", "active", "past_due") else None
     if plan is not None:
         return plan.seats

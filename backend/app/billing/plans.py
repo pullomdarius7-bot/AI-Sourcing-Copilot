@@ -41,6 +41,8 @@ TEAM_PLAN = "enterprise_buyer_monthly"
 def team_features(org) -> bool:
     """Sourcing Team features (margin rules, freight overlays, export API, priority processing): on the team plan,
     and for team accounts during their free trial so they can evaluate them."""
+    if getattr(org, "billing_exempt", False):
+        return True
     if org.plan == TEAM_PLAN and org.subscription_status in ("trialing", "active", "past_due"):
         return True
     return org.account_type == "org_buyer" and org.subscription_status == "none"

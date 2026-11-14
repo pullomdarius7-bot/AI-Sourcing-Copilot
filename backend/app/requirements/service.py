@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import gateway
 from app.ai.service import get_ai_service, input_limit
+from app.approvals import second_person_required
 from app.audit import record
 from app.billing.plans import DEEP_ANALYSIS
 from app.config import get_settings
@@ -503,7 +504,7 @@ async def approve_run(db: AsyncSession, p: Principal, run_id: uuid.UUID, note: s
     doc = await db.get(Document, run.document_id)
     if doc is None or not doc.extracted_text or sha(doc.extracted_text) != run.source_text_sha256:
         raise conflict("stale_source", "The document text changed since this extraction. Run the extraction again.")
-    if settings.require_separate_approver:
+    if await second_person_required(db, run.organization_id):
         actors = {run.created_by}
         for model in (Requirement, Parameter):
             actors |= set(await db.scalars(select(model.verified_by).where(model.run_id == run.id, model.verified_by.is_not(None))))

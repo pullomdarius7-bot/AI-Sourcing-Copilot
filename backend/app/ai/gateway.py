@@ -72,6 +72,10 @@ async def acquire(
     if not settings.billing_enforced:
         return Permit(org_id, action, subject_id, 0)
     org = await ledger.lock(db, org_id)
+    if org.billing_exempt:  # complimentary account: nothing is charged
+        await db.commit()
+        await set_tenant(db, org_id)
+        return Permit(org_id, action, subject_id, 0)
     if cost == 0:  # included in something already paid for: the account still needs access
         try:
             ensure_can_spend(org, 0)

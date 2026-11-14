@@ -81,10 +81,10 @@ export default function BillingPage() {
         <Card>
           <CardHeader>
             <CardDescription>Credits remaining</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{data.credit_balance}</CardTitle>
+            <CardTitle className="text-3xl tabular-nums">{data.billing_exempt ? "Unlimited" : data.credit_balance}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            {!data.ai_access
+            {data.billing_exempt ? "This is a complimentary account: AI analysis is free, with no plan or seat limits." : !data.ai_access
               ? "AI analysis is paused for this account."
               : data.purchased_credits > 0
                 ? `${data.purchased_credits} bought credit${data.purchased_credits === 1 ? "" : "s"} roll over; unused plan credits do not.`

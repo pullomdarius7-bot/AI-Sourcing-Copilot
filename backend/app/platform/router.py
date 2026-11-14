@@ -99,6 +99,7 @@ def _org_out(o: Organization, users: int | None = None) -> dict[str, Any]:
     return {k: getattr(o, k) for k in (
         "id", "name", "account_type", "plan", "subscription_status", "credit_balance", "purchased_credits",
         "trial_ends_at", "current_period_end", "onboarding_completed", "signup_promo", "stripe_customer_id",
+        "billing_exempt",
         "created_at")} | ({"users": users} if users is not None else {})
 
 
@@ -171,6 +172,21 @@ async def extend_trial(org_id: uuid.UUID, body: TrialExtend, p: Principal = Depe
            trial_ends_at=org.trial_ends_at.isoformat())
     await db.commit()
     return {"trial_ends_at": org.trial_ends_at}
+
+
+class Complimentary(Reason):
+    exempt: bool
+
+
+@router.post("/organizations/{org_id}/complimentary")
+async def set_complimentary(org_id: uuid.UUID, body: Complimentary, p: Principal = Depends(require_platform_admin),
+                            db: AsyncSession = Depends(get_db)):
+    """A complimentary account uses AI without credits, plan or seat limits (the owner's own accounts)."""
+    org = await ledger.lock(db, org_id)
+    org.billing_exempt = body.exempt
+    _audit(db, p, "account.comped" if body.exempt else "account.uncomped", "organization", org_id, note=body.note)
+    await db.commit()
+    return {"id": org_id, "billing_exempt": body.exempt}
 
 
 class UserActive(Reason):

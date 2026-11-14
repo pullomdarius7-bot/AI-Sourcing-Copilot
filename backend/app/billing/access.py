@@ -26,6 +26,8 @@ class PaymentRequired(ApiError):
 
 def access_problem(org: Organization, now: datetime | None = None) -> str | None:
     """None when the account has an active subscription or an unexpired trial; otherwise why it does not."""
+    if org.billing_exempt:
+        return None
     status = org.subscription_status
     if status in ("active", "trialing"):
         return None
@@ -37,6 +39,8 @@ def access_problem(org: Organization, now: datetime | None = None) -> str | None
 
 
 def ensure_can_spend(org: Organization, cost: int) -> None:
+    if org.billing_exempt:
+        return
     reason = access_problem(org)
     if reason is not None:
         raise PaymentRequired("SUBSCRIPTION_REQUIRED", _REASONS[reason], org.credit_balance, reason)

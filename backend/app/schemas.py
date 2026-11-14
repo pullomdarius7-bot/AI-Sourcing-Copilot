@@ -120,6 +120,7 @@ class MeOut(UserOut):
     plan: str | None
     subscription_status: str
     ai_access: bool
+    billing_exempt: bool = False
     permissions: list[str]
 
 
