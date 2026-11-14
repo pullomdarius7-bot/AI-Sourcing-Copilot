@@ -36,7 +36,8 @@ async def set_credits(admin_engine, org_id, amount):
 def without_ids_and_times(value):
     if isinstance(value, dict):
         return {k: without_ids_and_times(v) for k, v in value.items()
-                if not (k == "id" or k.endswith("_id") or k.endswith("_at") or k == "member_since")}
+                if not (k == "id" or k.endswith("_id") or k.endswith("_at") or k == "member_since"
+                        or "sha256" in k or k.endswith("hash"))}  # random digits that can contain any number
     if isinstance(value, list):
         return [without_ids_and_times(v) for v in value]
     return value
