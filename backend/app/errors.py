@@ -5,12 +5,14 @@ class ApiError(Exception):
         code: str,
         message: str,
         headers: dict[str, str] | None = None,
+        extra: dict | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.headers = headers or {}
+        self.extra = extra or {}  # additional fields of the error object, e.g. remaining credits
 
 
 def unauthorized(message: str = "Authentication required", code: str = "unauthorized") -> ApiError:

@@ -70,7 +70,7 @@ async def list_documents(
 ):
     if status and status not in STATUSES:
         raise ApiError(422, "validation_error", "Unknown status filter")
-    conditions = [Document.organization_id == p.org_id]
+    conditions = [Document.organization_id == p.org_id, Document.purpose == "sourcing"]
     if status:
         conditions.append(Document.status == status)
     if q:

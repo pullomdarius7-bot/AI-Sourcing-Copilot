@@ -13,6 +13,9 @@ No third-party identity provider, no required SaaS.
 - MinIO console: http://localhost:9001 (credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env)
 - API (localhost only): http://127.0.0.1:8000/api/v1/health
 
+On an Android phone without Docker: follow the step-by-step guide in [`docs/TERMUX.md`](docs/TERMUX.md)
+(`bash scripts/termux/setup.sh`, then `start.sh`).
+
 HTTPS: set DOMAIN and APP_BASE_URL, set COOKIE_SECURE=true, then `docker compose --profile tls up -d`.
 Real email: point SMTP_* in .env at your own SMTP relay.
 
@@ -285,3 +288,277 @@ security and readiness checklists.
 
 Note: the web front end is now published on 127.0.0.1 only (`FRONTEND_BIND`). On a development machine nothing changes
 (http://localhost:3000). To reach it from other machines without a reverse proxy, set `FRONTEND_BIND=0.0.0.0`.
+
+## Phases 1-2: public site, account types, onboarding and trial credits
+
+**Public landing page.** `/` is the public marketing page (hero, who it is for, comparison, how it works, pricing).
+Signed-in visitors are sent to `/dashboard`. Its calls to action link to `/register?tier=trial`,
+`/register?role=org_buyer` and `/register?role=supplier`. Copy and prices live in
+`frontend/src/components/landing/`.
+
+**Registration.** Open to anyone: name, email and password. The `role` link parameter only pre-selects a role.
+
+**Onboarding wizard (`/onboarding`).** After verifying the email and signing in, the first administrator of an
+account is sent through three steps. Until it is finished every feature endpoint answers
+`403 onboarding_required`; sign-in, sessions, password and two-factor endpoints keep working.
+
+1. Role: `solo_buyer`, `org_buyer` or `supplier`. Fixed once onboarding is complete.
+2. Categories and scale. Buyers: product categories, monthly purchasing budget, preferred lot sizes. Suppliers:
+   inventory types, typical manifest format, dispatch regions. Team and supplier accounts also name their company.
+3. Provisioning: the answers are saved, `onboarding_completed` is set, the free trial starts and the user lands
+   on the dashboard.
+
+The roles, questions and allowed answers are defined in `backend/app/onboarding.py`, served by
+`GET /api/v1/onboarding` and submitted to `PUT /api/v1/onboarding`; only listed options are stored.
+
+| Account type | Who it is for | Tenancy |
+|---|---|---|
+| `solo_buyer` | One person sourcing for their own resale business | An organization of one; invitations are refused |
+| `org_buyer` | A procurement team | Members, the five roles and approvals described above |
+| `supplier` | A wholesaler or liquidator listing inventory | Own organization; its staff are invited like any team |
+
+**Data model.** The account type, `onboarding_completed`, `onboarding_completed_at` and `onboarding_profile`
+(JSONB) are columns of `organizations` (migration `0008`). Organizations that existed before became `org_buyer`
+with onboarding completed and no trial.
+
+**Credits and trial.** One credit is the unit everything is priced in. `credit_transactions` is the record of
+every grant and charge; `organizations.credit_balance` is the running balance. Both are changed only by
+`backend/app/billing/ledger.py`, in one transaction, with the organization row locked (`SELECT ... FOR UPDATE`):
+the balance cannot go below zero and concurrent charges cannot overspend. Finishing onboarding grants
+`TRIAL_CREDITS` (10) and sets `trial_ends_at` to `TRIAL_DAYS` (7) from now, once per account.
+
+**Isolation.** Every tenant table carries `organization_id` under forced row-level security, and a test fails if
+a table with that column is added without it. `alembic downgrade 0007` removes everything in this section and the next.
+
+## Phase 3: Stripe billing, credit metering and the AI gateway
+
+**The gateway.** `backend/app/ai/gateway.py` is the only code that calls a model provider (a test fails if any
+other file does). Every AI action goes through four steps:
+
+1. `acquire`: lock the account, check it has an active subscription or an unexpired trial, check the balance
+   covers the cost, deduct the credits and commit. If a check fails nothing is charged, no provider is
+   contacted, and the caller gets HTTP 402:
+   `{"error": {"code": "INSUFFICIENT_CREDITS" | "SUBSCRIPTION_REQUIRED", "remaining": 0, "upgrade_url": "/billing", ...}}`
+2. `dispatch`: the model call (one charge can cover several calls, e.g. the chunks of a long document).
+3. `settle`: on success, in the transaction that stores the result.
+4. `release`: on failure the credits are refunded. If a worker dies mid-call the charge stays `held` and the
+   retry of the same document or run reuses it instead of charging again.
+
+| Action | Cost | Where |
+|---|---|---|
+| `manifest_extraction` | 1 credit under 500 line items, otherwise 1 per 100 line items | Analysis of every uploaded document |
+| `deep_analysis` | 1 credit per run (`CREDIT_COST_DEEP_ANALYSIS`) | Requirement extraction; answers 402 before a job is queued |
+| `assistant_answer` | 1 credit (`CREDIT_COST_ASSISTANT_ANSWER`) | Model-written assistant answers; without credits the assistant answers from fixed rules and no model is used |
+
+An upload is always accepted, scanned and made searchable; without credits only its AI analysis is skipped,
+with the reason shown on the document. `BILLING_ENFORCED=false` switches all checks off.
+
+**Plans.** `solo_buyer_monthly` ($79, 25 credits), `enterprise_buyer_monthly` ($249, 250 credits, turns a solo
+account into a team) and `supplier_monthly` ($149, 100 credits). Buyers can choose either buyer plan; suppliers
+the supplier plan. Each paid invoice resets the balance to the plan's quota: unused credits do not roll over.
+
+**Stripe setup.**
+
+1. In Stripe create one recurring monthly price per plan and set its lookup key to the plan key (or put the
+   price ids in `STRIPE_PRICE_*`).
+2. Add a webhook endpoint `https://<domain>/api/webhooks/stripe` for `checkout.session.completed`,
+   `invoice.payment_succeeded`, `invoice.payment_failed`, `customer.subscription.updated` and
+   `customer.subscription.deleted`.
+3. Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in `.env`, and enable the customer portal in Stripe.
+
+**Endpoints.** `GET /api/billing` (plan, status, balance, plans, recent transactions),
+`POST /api/billing/create-checkout-session` and `POST /api/billing/create-portal-session` (administrators
+only), `POST /api/webhooks/stripe` (authenticated by Stripe's signature over the raw body; events older than
+five minutes or already processed are not applied again).
+
+| Event | Effect |
+|---|---|
+| `checkout.session.completed` | Links customer and subscription, sets the plan; if paid: `active` and the monthly quota. With a trial: `trialing`, trial credits kept |
+| `invoice.payment_succeeded` | `active`, quota refilled, period end stored. A zero-amount trial invoice grants nothing |
+| `invoice.payment_failed` | `past_due`: AI is paused and the account's administrators are emailed |
+| `customer.subscription.updated` | Plan and status changes made in the portal |
+| `customer.subscription.deleted` | `cancelled`, plan removed, remaining credits wiped |
+
+Checkout carries over only what is left of the account's free trial (a card is collected, the first charge
+happens when the trial ends). An account whose trial credits or days are used up is charged immediately and
+gets its quota immediately.
+
+**In the app.** The header shows the credits left, the trial countdown and an "Add Credits / Upgrade" button; a
+banner appears on every page at 2 credits or fewer, after the trial, after a failed payment and after
+cancellation. `/billing` shows the plan, the plans available, the portal and the credit activity.
+
+Migration `0010` renames `credit_ledgers` to `credit_transactions`, adds the action, the subject and the
+held/settled/refunded state, adds the subscription columns and `stripe_events`, and starts a standard trial for
+accounts that existed before trials did.
+
+## Phase 4: two-sided marketplace, supplier ingestion and masked RFQs
+
+**Supplier side (`/supplier/manifests`).** A supplier uploads a manifest (CSV, XLSX or PDF). It goes through the
+same upload checks and virus scan as any document, then a `manifest.normalize` job turns it into lot lines:
+
+- Rules first, always: the header row is found by column name, quantities and prices are parsed exactly, the
+  condition grade (`new`, `like_new`, `customer_return`, `salvage`), category, brand, UPC, ASIN and model number
+  are mapped from vocabularies, unit MSRP is derived from extended retail, and totals rows are skipped.
+- Then the AI model, when one is configured and the account can pay (Phase 3 gateway, `manifest_extraction`
+  pricing). It cleans titles and fills brand, category, condition and identifiers in batches. It never supplies
+  quantities or prices, and each value must be traceable to its row: invented brands, identifiers or words, and
+  changed model-number spellings, are rejected and flagged. Without credits the rules result is kept.
+- PDF manifests have no table, so they need the model; every line it returns must quote a line of the PDF text
+  that contains its numbers.
+- Phone numbers, emails, links and the supplier's own company name are removed from titles.
+
+The supplier then sets the lot type (single pallet, multi-pallet, truckload), the Buy-It-Now price, a private
+reserve, the dispatch ZIP, loading conditions (liftgate, dock-high only, local pickup) and private pickup details,
+and publishes. Publishing needs an active subscription or trial (402 otherwise).
+
+**Buyer side (`/marketplace`).** Buyers filter published lots by category, condition, lot size, region, minimum
+estimated margin, price and text. Each lot shows total units, total MSRP, asking price, estimated resale value and
+gross margin (condition and category recovery rates, `backend/app/marketplace/valuation.py`) and the grade mix.
+"Run AI Deep Analysis" costs 1 credit (`deep_analysis`, 402 without credits) and produces an itemized net profit
+model: resale value per item (model estimates kept only within 2-100% of MSRP), channel fees, refurbishment,
+unsellable units, freight, net profit, ROI, a maximum bid at the buyer's target margin and a buy / negotiate /
+pass call.
+
+**Masking.** Buyers never see the seller's company, people, email, phone, reserve, pickup address or full ZIP
+(only region and the first three digits); sellers never see the buyer's. Each side appears under a stable alias
+and earned badges ("Verified Liquidator - Midwest Hub", "10+ Lots Completed"); "Verified" means a paid
+subscription. This is enforced by row-level security, not only by the API:
+
+| Table | Who can read it |
+|---|---|
+| `marketplace_lots`, `lot_items` | The supplier; everyone else only while the lot is published or sold |
+| `lot_private_details` (reserve, pickup) | The supplier only |
+| `market_profiles` (alias, badges) | Everyone; written only by the system |
+| `lot_analyses` | The buyer who paid for it |
+| `rfq_threads`, `rfq_thread_events` | The two parties of the negotiation only |
+| `rfq_moderation` (text before scrubbing) | The author's account only |
+
+**Negotiation (`/messages`, `/rfq/[id]`).** "Submit Offer / Request Quote" opens a thread with a price, freight
+terms (buyer or seller arranges), a target close date and custom terms. The party facing an offer can accept,
+decline or counter; the author can withdraw. Offers below the private reserve are declined automatically without
+revealing it. Messages and terms are scrubbed of emails (also "name at gmail dot com"), phone numbers, links,
+payment links and handles, with a warning to the sender; mentions of off-platform payment are flagged. Every step
+is an append-only, hash-chained event (the app role can only insert), and the page shows whether the chain
+verifies. Acceptance marks the lot sold, closes other buyers' negotiations, updates the badges, and releases both
+parties' company and contact details and the pickup address inside the thread. Every offer, counter, decision and
+message emails the other side with masked identities only.
+
+Migration `0011` adds the tables above and `documents.purpose`; `alembic downgrade 0010` removes them.
+
+## Pricing, seats and pay-as-you-go credits
+
+**One price list.** `backend/app/billing/plans.py` is the only place prices, monthly credits, seats and top-up
+prices are defined. The public pricing page reads them from `GET /api/v1/billing/plans` (no sign-in). When the API
+is unreachable it falls back to `frontend/src/lib/plans.ts`, and a backend test fails if that copy drifts from the
+catalog or if the landing page hard-codes a price, credit or seat number again.
+
+| Plan | Price | Credits a month | Seats | Extra credit |
+|---|---|---|---|---|
+| Solo Operator (`solo_buyer_monthly`) | $79 | 25 | 1 | $2.99 |
+| Sourcing Team (`enterprise_buyer_monthly`) | $249 | 250 | 5 | $0.99 |
+| Verified Supplier (`supplier_monthly`) | $149 | 100 | unlimited | $1.49 |
+
+Extra credits cost the plan's own per-credit rate, rounded down ($79/25, $249/250, $149/100), so running out never
+costs more than the plan. They can be bought once the balance is down to 5 credits (enough headroom for a
+large manifest). Supplier seats are unlimited: more people answering buyers means faster replies, and seats cost
+nothing to run.
+
+**Seats.** A seat is an active user or an open invitation. Inviting, reactivating someone or accepting an
+invitation is refused with `409 seat_limit_reached` (with `seats_used` and `seat_limit`) when no seat is free.
+Before subscribing, a team account has `TRIAL_SEATS` (5) and a solo account 1. After a downgrade nobody is
+removed, but no one new can join until the account is back under its limit. `GET /api/v1/seats` and the Team and
+Billing pages show the usage.
+
+**Pay-as-you-go credits.** A subscriber whose balance is down to `TOPUP_AVAILABLE_AT_OR_BELOW` (5) credits or
+fewer can buy 5 to 500 extra credits at the plan's per-credit price from the Billing page
+(`POST /api/v1/billing/create-topup-session`, a one-off Stripe Checkout payment; no Stripe price setup needed).
+Credits are granted when Stripe confirms the payment (`checkout.session.completed`, or
+`checkout.session.async_payment_succeeded` for delayed payment methods), once per session, and only if the amount
+paid matches the credits priced. Bought credits are spent after the month's plan credits, roll over at renewal and
+are kept if the subscription ends (they can be used again after resubscribing). A 402 for missing credits says
+whether a top-up is possible (`can_top_up`). Trial accounts cannot buy credits; they choose a plan.
+Migration `0012` adds `organizations.purchased_credits`.
+
+## AI sourcing engine
+
+Buyers describe what they need at **AI Sourcing** (`/sourcing`): product, details, category, condition, quantity,
+target price, delivery region and date. Every field is required (form and API) so the search runs on a complete brief.
+
+1. **Marketplace first (free).** Published lots whose title or lines match the request (and its category) are
+   listed straight away.
+2. **Then the web.** When no lot matches (or the buyer asks), a `sourcing.web_search` job searches through a search
+   API (`SEARCH_PROVIDER`: self-hosted SearXNG or Brave Search; search-result pages are never scraped), skips
+   marketplaces and social networks, and reads up to `WEB_SOURCING_MAX_SITES` (5) supplier websites: the page found plus
+   up to two contact / about / wholesale pages each. The crawler honours robots.txt, fetches only public internet
+   addresses (every redirect re-checked, against server-side request forgery), reads HTML only, and limits size
+   and time. `/bot` explains it to website owners.
+3. **Organized results.** The AI model turns each site into a supplier profile (business type, location, matching
+   products, MOQ, pricing, wholesale terms, contact, relevance) and every detail is checked against the pages:
+   products and terms must be quoted from them, and a contact email must be published there. Unverifiable values
+   are dropped. Without a model, a smaller profile is built by rules. Sites that are not B2B suppliers or not
+   relevant are discarded. Costs `CREDIT_COST_WEB_SOURCING` (2) credits, refunded when nothing is found; the buyer
+   is emailed when results are ready.
+4. **Masked suppliers.** The buyer never sees a web supplier's business name, website, email or phone: they are
+   shown as `Supplier W-XXXXX` with a profile scrubbed of names and contacts and a state-level location. The
+   identity is stored only in the platform-level invitation record, not in the buyer's data, so the deal stays on
+   the platform.
+5. **Invitations and free quotes.** The `INVITES_PER_REQUEST` (3) most relevant suppliers are invited. From the
+   invitation they can send a quote on the buyer's request for free, without an account (`/quote`); the buyer sees it
+   under the masked alias and can decline or say it wants to go ahead (with a reply). Continuing requires the
+   supplier to register (free): on registration every open quote becomes a masked negotiation with the buyer's
+   reply in it. Suppliers who join through an invitation get `INVITE_FIRST_MONTH_DISCOUNT_PCT` (75%) off their first
+   month of the Verified Supplier plan (a once-only Stripe coupon; no trial days, so the discount lands on a paid
+   invoice). Once on the platform they see
+   open buyer requests under **Buyer requests** (`/supplier/requests`, masked, best matches first, no per-lead
+   fees) and answer with one of their lots, which opens a masked negotiation in which they made the first offer.
+
+**Invitation safeguards** (`backend/app/sourcing/invites.py`): only an address the business published on its own
+site; only requests the buyer opened to suppliers; the buyer stays anonymous; one email per domain per
+`INVITE_COOLDOWN_DAYS` (90), with later requests added to the same invitation; a global `INVITE_DAILY_LIMIT`;
+businesses already on the platform are skipped; every email says why it was sent, carries a one-click unsubscribe
+(address and domain suppressed for good) and the sender's postal address. Without
+`INVITE_SENDER_POSTAL_ADDRESS` invitations are recorded but held. `SUPPLIER_INVITES=review` records without
+sending; `off` disables them. Invitation and suppression records are platform-level: no account can read them.
+
+## What each plan includes
+
+| Promise on the pricing page | Where it is |
+|---|---|
+| Full manifest analyses | **Deal analyzer** (`/deals`): upload manifests from auctions or outside suppliers (batch: up to 20 files). Each becomes a private lot (never listed), is normalized, and analysed automatically with the account's margin rules once its cost is known. One credit per manifest up to 500 lines; the first analysis is included, re-runs cost one credit. |
+| Exportable deal sheets (PDF/CSV) | Every deep analysis: `GET /api/marketplace/analyses/{id}/deal-sheet.pdf` / `.csv` |
+| AI supplier sourcing | `/sourcing`, above |
+| Custom margin rules & freight overlays (Team) | **Team tools** (`/team-tools`): sales channel, minimum net margin, freight per pallet / truckload, handling per unit, used as the defaults of every analysis |
+| API export (Team) | Read-only keys in Team tools; `GET /api/export/analyses`, `/api/export/sourcing-requests`, `/api/export/manifests` with `Authorization: Bearer sca_...` |
+| Priority AI processing (Team) | Team accounts' jobs carry priority 10 and are claimed first |
+| Priority support (Team) | `SUPPORT_EMAIL` shown on Billing; Team requests are marked `[Priority]` |
+| Buyer requests matched to your inventory (Supplier) | `/supplier/requests` |
+
+Team features are also available to team accounts during their free trial. Migration `0013` adds the tables;
+`alembic downgrade 0012` removes them.
+
+## Platform back office (owner only)
+
+The platform owner's view of every account, with health checks and audited manual fixes, at **Back office**
+(`/platform`). Only users marked as platform admins can open it; for everyone else it returns 404. That mark is set
+only from the server's command line, never through the website:
+
+    python -m app.ops grant-platform-admin you@example.com      # Docker: docker compose exec backend python -m app.ops ...
+    python -m app.ops revoke-platform-admin someone@example.com
+    python -m app.ops list-platform-admins
+    python -m app.ops comp-account you@example.com              # this user's account: free, unlimited AI
+    python -m app.ops health                                    # the same health checks, in the terminal
+
+With `PLATFORM_ADMIN_REQUIRES_MFA=true` (the default) platform admins must turn on two-factor sign-in first.
+
+| Tab | What it does |
+|---|---|
+| Health | Platform totals and checks for the database, migrations, file storage, background worker, failed jobs, AI providers, web search, Stripe, email, supplier invitations and virus scanning (OK / WARN / FAIL) |
+| Accounts | Search by business name, user email or Stripe customer id; see users, plan and credit history; add or remove credits, extend a trial, deactivate a user (signs them out everywhere) |
+| Invitations | Every web-found supplier with its real identity (never shown to buyers); resend now (skips the cooldown and daily cap, never an opt-out) or hold |
+| Opt-outs | Unsubscribed addresses and domains; lift one at the business's written request |
+| Jobs | Background jobs across all accounts; stop queued or running ones (credits still held are refunded), retry failed or stopped ones |
+| Audit | Every back-office action with the admin, time and the reason they gave |
+
+Every change asks for a reason and is written to `platform_audit`, which only the system can read or write
+(customers cannot see it, and it is never updated or deleted). Migration `0015` adds `users.is_platform_admin` and
+`platform_audit`; `alembic downgrade 0014` removes them.

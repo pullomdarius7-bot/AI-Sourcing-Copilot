@@ -13,7 +13,24 @@ from app import metrics
 from app.config import get_settings
 from app.db import SessionLocal, engine, set_system
 from app.errors import ApiError
-from app.routers import agent, analysis, auth, documents, health, jobs, requirements, rfqs, suppliers, team
+from app.platform.router import router as platform_router
+from app.routers import (
+    agent,
+    analysis,
+    auth,
+    billing,
+    documents,
+    export,
+    health,
+    jobs,
+    marketplace,
+    onboarding,
+    requirements,
+    rfqs,
+    sourcing,
+    suppliers,
+    team,
+)
 
 settings = get_settings()
 logger = logging.getLogger("app")
@@ -39,7 +56,7 @@ if settings.cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
         allow_credentials=False,
     )
@@ -103,7 +120,7 @@ def _error(status: int, code: str, message: str, headers=None, **extra) -> JSONR
 
 @app.exception_handler(ApiError)
 async def api_error_handler(_: Request, exc: ApiError):
-    return _error(exc.status_code, exc.code, exc.message, exc.headers)
+    return _error(exc.status_code, exc.code, exc.message, exc.headers, **exc.extra)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -130,6 +147,12 @@ async def unhandled_error_handler(_: Request, exc: Exception):
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(onboarding.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
+app.include_router(billing.webhooks, prefix="/api/v1")
+app.include_router(marketplace.router, prefix="/api/v1")
+app.include_router(sourcing.router, prefix="/api/v1")
+app.include_router(export.router, prefix="/api/v1")
 app.include_router(team.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
@@ -138,3 +161,4 @@ app.include_router(suppliers.router, prefix="/api/v1")
 app.include_router(rfqs.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
+app.include_router(platform_router, prefix="/api/v1")

@@ -5,12 +5,15 @@ import logging
 import secrets
 import time
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import gateway
 from app.ai import guardrails as guard
 from app.ai.providers import LLMProvider, LLMRequest, ProviderError, build_providers
 from app.ai.schemas import ANALYSIS_JSON_SCHEMA
+from app.billing.plans import MANIFEST_EXTRACTION
 from app.config import get_settings
 from app.db import set_tenant
 from app.jobs.errors import PermanentError, RetryableError
@@ -53,6 +56,26 @@ class AnalysisOutcome:
         self.reason = reason
 
 
+SPREADSHEET_TYPES = ("text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def line_items(doc: Document) -> int:
+    """Line items in a tabular manifest (rows of text); 0 for anything else, which is priced as one small file."""
+    if doc.content_type not in SPREADSHEET_TYPES:
+        return 0
+    return sum(1 for line in (doc.extracted_text or "").splitlines() if line.strip())
+
+
+@dataclass
+class AiSubject:
+    """What a structured call is about when it is not an uploaded document (e.g. a marketplace analysis).
+    Its id is recorded as the document_id of the AI audit log."""
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    filename: str
+
+
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -68,7 +91,7 @@ class AIService:
         return self._providers
 
     async def _audit(
-        self, db: AsyncSession, doc: Document, user_id: uuid.UUID | None, provider: LLMProvider,
+        self, db: AsyncSession, doc: "Document | AiSubject", user_id: uuid.UUID | None, provider: LLMProvider,
         purpose: str = PURPOSE, **fields,
     ) -> None:
         db.add(
@@ -96,7 +119,15 @@ class AIService:
         if not text.strip() and not images:
             return AnalysisOutcome("skipped", reason="The document has no extractable text")
 
-        prepared = guard.prepare_text(text, settings.ai_max_input_chars)
+        # Pre-flight: the account is checked and charged before any provider is contacted.
+        try:
+            permit = await gateway.acquire(
+                db, doc.organization_id, MANIFEST_EXTRACTION, doc.id, units=line_items(doc), user_id=user_id
+            )
+        except gateway.PaymentRequired as exc:
+            return AnalysisOutcome("skipped", reason=exc.message)
+
+        prepared = guard.prepare_text(text, input_limit(providers))
         retryable_seen = False
         last_error = "no provider succeeded"
 
@@ -115,7 +146,7 @@ class AIService:
                 request = LLMRequest(SYSTEM_PROMPT, user_prompt + repair, ANALYSIS_JSON_SCHEMA, images)
                 started = time.monotonic()
                 try:
-                    response = await provider.generate(request)
+                    response = await gateway.dispatch(permit, provider, request)
                 except ProviderError as exc:
                     last_error = str(exc)
                     retryable_seen = retryable_seen or exc.retryable
@@ -148,6 +179,7 @@ class AIService:
                     needs_review=review, input_tokens=response.input_tokens, output_tokens=response.output_tokens,
                 )
                 db.add(extraction)
+                await gateway.settle(db, permit)  # the charge becomes final together with the result
                 await self._audit(
                     db, doc, user_id, provider, status="ok", prompt_sha256=prompt_hash,
                     response_sha256=response_hash, input_chars=len(body_text), latency_ms=latency,
@@ -155,6 +187,7 @@ class AIService:
                 )
                 return AnalysisOutcome("needs_review" if review else "succeeded", extraction)
 
+        await gateway.release(db, permit)  # nothing was produced: the credits go back
         if retryable_seen:
             raise RetryableError(f"All AI providers failed: {last_error}")
         raise PermanentError(f"AI analysis failed: {last_error}")
@@ -163,8 +196,9 @@ class AIService:
     async def structured_call(
         self,
         db: AsyncSession,
-        doc: Document,
+        doc: "Document | AiSubject",
         *,
+        permit: gateway.Permit,
         user_id: uuid.UUID | None,
         purpose: str,
         system: str,
@@ -175,11 +209,12 @@ class AIService:
         instruction: str = "Return the result for the document above.",
         max_tokens: int = 8192,
     ) -> StructuredResult:
-        """Generic, audited, schema-forced model call with failover and one repair attempt."""
+        """Generic, audited, schema-forced model call with failover and one repair attempt. The caller holds
+        the permit (one charge may cover several calls) and settles or releases it."""
         providers = self.providers
         if not providers:
             raise PermanentError("No AI provider is configured")
-        prepared = guard.prepare_text(text, settings.ai_max_input_chars)
+        prepared = guard.prepare_text(text, input_limit(providers))
         retryable_seen = False
         last_error = "no provider succeeded"
 
@@ -197,7 +232,7 @@ class AIService:
                 request = LLMRequest(system, user_prompt + repair, schema, [], max_tokens, schema_name)
                 started = time.monotonic()
                 try:
-                    response = await provider.generate(request)
+                    response = await gateway.dispatch(permit, provider, request)
                 except ProviderError as exc:
                     last_error = str(exc)
                     retryable_seen = retryable_seen or exc.retryable
@@ -237,6 +272,14 @@ class AIService:
 
 
 _service: AIService | None = None
+
+
+def input_limit(providers) -> int:
+    """How much document text one call may carry. With a model on the server's own CPU in the chain, the text is
+    capped to what that model can read in its context window; otherwise the normal limit applies."""
+    if any(p.name == "local" for p in providers):
+        return min(settings.ai_max_input_chars, settings.local_llm_max_input_chars)
+    return settings.ai_max_input_chars
 
 
 def get_ai_service() -> AIService:

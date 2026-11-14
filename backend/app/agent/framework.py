@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent import audit, composer, llm, memory, prompts, retrieval, safety, tools
 from app.agent import planner as rules
 from app.agent.sources import Fact, SourceBook
+from app.ai import gateway
 from app.ai.service import get_ai_service
+from app.billing.plans import ASSISTANT_ANSWER
 from app.config import get_settings
 from app.db import set_tenant
 from app.deps import Principal
@@ -60,12 +62,27 @@ async def ask(db: AsyncSession, p: Principal, conversation: AgentConversation, q
     user_msg = AgentMessage(organization_id=p.org_id, conversation_id=conversation_id, role="user", content=question)
     db.add(user_msg)
     await db.flush()
+    # A model-written answer is paid for up front. Without credits the assistant still answers, from fixed
+    # rules and the tool results, and no model is contacted.
+    permit: gateway.Permit | None = None
+    if choose_mode()[0] == "llm":
+        try:
+            permit = await gateway.acquire(db, p.org_id, ASSISTANT_ANSWER, run_id, user_id=p.user.id)
+        except gateway.PaymentRequired:
+            permit = None
     try:
         async with db.begin_nested():
-            run, answer = await _answer(db, p, conversation, question, run_id, started)
+            run, answer = await _answer(db, p, conversation, question, run_id, started, permit)
+        if permit is not None:
+            if any(call.get("status") == "ok" for call in run.llm_calls or []):
+                await gateway.settle(db, permit)
+            else:
+                await gateway.release(db, permit, commit=False)  # no model produced anything
     except Exception as exc:  # the user gets an honest failure, and the failure is still traceable
         logger.exception("agent run failed")
         await set_tenant(db, p.org_id)
+        if permit is not None:
+            await gateway.release(db, permit, commit=False)
         await db.refresh(conversation)  # anything the failed savepoint touched is reloaded, not trusted
         run = AgentRun(id=run_id, organization_id=p.org_id, conversation_id=conversation_id, user_id=p.user.id,
                        question=question, mode="deterministic", status="error", prompt_version=prompts.PROMPT_VERSION,
@@ -87,9 +104,11 @@ async def ask(db: AsyncSession, p: Principal, conversation: AgentConversation, q
 
 
 async def _answer(db: AsyncSession, p: Principal, conversation: AgentConversation, question: str, run_id: uuid.UUID,
-                  started: float) -> tuple[AgentRun, dict[str, Any]]:
+                  started: float, permit: gateway.Permit | None = None) -> tuple[AgentRun, dict[str, Any]]:
     verdict = safety.check_question(question, settings.agent_max_question_chars)
     mode, providers, mode_flags = choose_mode()
+    if mode == "llm" and permit is None:
+        mode, providers, mode_flags = "deterministic", [], mode_flags + ["model_not_used_no_credits"]
     safety_record: dict[str, Any] = {"flags": verdict.flags + mode_flags, "problems": []}
     run = AgentRun(id=run_id, organization_id=p.org_id, conversation_id=conversation.id, user_id=p.user.id,
                    question=question, mode=mode, status="answered", prompt_version=prompts.PROMPT_VERSION,
@@ -110,7 +129,7 @@ async def _answer(db: AsyncSession, p: Principal, conversation: AgentConversatio
 
     if mode == "llm":
         convo = await memory.history(db, conversation, settings.agent_history_turns)
-        model_steps, outcome = await llm.plan(providers, question, convo, await memory.describe_focus(db, focus))
+        model_steps, outcome = await llm.plan(permit, providers, question, convo, await memory.describe_focus(db, focus))
         llm_calls += outcome.records
         valid = [s for s in model_steps if s.tool in tools.TOOLS and _args_ok(s)]
         if model_steps and len(valid) < len(model_steps):
@@ -157,7 +176,7 @@ async def _answer(db: AsyncSession, p: Principal, conversation: AgentConversatio
     final = checked
 
     if mode == "llm" and any(f for _, f in results):
-        outcome = await llm.write(providers, question, book, checked.unknowns)
+        outcome = await llm.write(permit, providers, question, book, checked.unknowns)
         llm_calls += outcome.records
         _usage(run, outcome)
         parsed = llm.parse_answer(outcome.data) if outcome.data is not None else None

@@ -48,7 +48,7 @@ class LLMProvider:
 
     async def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         owns = self._client is None
-        client = self._client or httpx.AsyncClient(timeout=settings.ai_timeout_seconds)
+        client = self._client or httpx.AsyncClient(timeout=getattr(self, "timeout", None) or settings.ai_timeout_seconds)
         try:
             response = await client.post(url, headers=headers, json=body)
         except httpx.TimeoutException as exc:
@@ -59,7 +59,11 @@ class LLMProvider:
             if owns:
                 await client.aclose()
         if response.status_code in (408, 409, 425, 429) or response.status_code >= 500:
-            raise ProviderError(f"{self.name} returned HTTP {response.status_code}", retryable=True)
+            # The server's own reason (e.g. Ollama: "model requires more system memory") is what makes this fixable.
+            detail = " ".join(response.text.split())[:200]
+            raise ProviderError(
+                f"{self.name} returned HTTP {response.status_code}" + (f": {detail}" if detail else ""), retryable=True
+            )
         if response.status_code >= 400:
             raise ProviderError(
                 f"{self.name} rejected the request (HTTP {response.status_code}): {response.text[:200]}",
@@ -90,34 +94,123 @@ class AnthropicProvider(LLMProvider):
             for mime, data in request.images
         ]
         content.append({"type": "text", "text": request.user})
-        body = {
+        body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": request.max_tokens,
-            "temperature": 0,
             "system": request.system,
             "messages": [{"role": "user", "content": content}],
-            "tools": [{
+            "output_config": {"effort": settings.anthropic_effort},
+        }
+        # Current models reject a forced tool call and non-default sampling parameters, so neither is sent.
+        strict = json_output_schema(request.schema)
+        if union_count(strict) <= MAX_STRICT_UNIONS:
+            # JSON outputs: the reply is guaranteed to match the schema.
+            body["output_config"]["format"] = {"type": "json_schema", "schema": strict}
+        else:
+            # Too many optional fields for the API to compile strictly: ask for the one tool instead. The reply is
+            # validated against the full schema by the caller, exactly as for every other provider.
+            body["system"] = (
+                f"{request.system}\n\nRecord your result by calling the {request.schema_name} tool exactly once. "
+                "Do not answer in plain text."
+            )
+            body["tools"] = [{
                 "name": request.schema_name,
                 "description": "Record the structured result for the document.",
                 "input_schema": request.schema,
-            }],
-            "tool_choice": {"type": "tool", "name": request.schema_name},
-        }
+            }]
+            body["tool_choice"] = {"type": "auto"}
         data = await self._post(
             f"{self.base_url}/v1/messages",
             {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
             body,
         )
+        if data.get("stop_reason") == "refusal":
+            raise ProviderError("anthropic declined the request", retryable=False)
         if data.get("stop_reason") == "max_tokens":
             raise ProviderError("anthropic output was truncated", retryable=False)
-        for block in data.get("content", []):
+        import json
+
+        usage = data.get("usage", {})
+
+        def answer(parsed: Any) -> LLMResponse:
+            return LLMResponse(parsed, data.get("model", self.model), usage.get("input_tokens"), usage.get("output_tokens"))
+
+        blocks = data.get("content", [])
+        for block in blocks:
             if block.get("type") == "tool_use" and block.get("name") == request.schema_name:
-                usage = data.get("usage", {})
-                return LLMResponse(
-                    block.get("input"), data.get("model", self.model),
-                    usage.get("input_tokens"), usage.get("output_tokens"),
-                )
+                return answer(block.get("input"))
+        for block in blocks:
+            if block.get("type") == "text" and block.get("text", "").strip():
+                try:
+                    return answer(json.loads(block["text"]))
+                except ValueError as exc:
+                    raise ProviderError("anthropic returned invalid JSON", retryable=True) from exc
         raise ProviderError("anthropic returned no structured output", retryable=True)
+
+
+# The API refuses to compile a strict schema with more fields than this that can be one of several types
+# ("too many parameters with union types"); such schemas go through a tool call instead.
+MAX_STRICT_UNIONS = 16
+
+
+def union_count(schema: Any) -> int:
+    if isinstance(schema, dict):
+        return (1 if "anyOf" in schema else 0) + sum(union_count(v) for v in schema.values())
+    if isinstance(schema, list):
+        return sum(union_count(item) for item in schema)
+    return 0
+
+
+# Keywords JSON outputs do not accept; the caller validates the reply against the full schema afterwards.
+_UNSUPPORTED = frozenset({
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "pattern",
+    "minItems", "maxItems", "uniqueItems",
+})
+
+
+def json_output_schema(schema: Any) -> Any:
+    """The schema in the subset JSON outputs accept: unsupported constraints dropped, every object closed, and
+    `"type": ["string", "null"]` written as anyOf."""
+    if isinstance(schema, list):
+        return [json_output_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _UNSUPPORTED:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: json_output_schema(sub) for name, sub in value.items()}
+        else:
+            out[key] = json_output_schema(value)
+    if out.get("type") == "object":
+        out["additionalProperties"] = False
+    if isinstance(out.get("type"), list):
+        types = out.pop("type")
+        return {"anyOf": [_branch(out, t) for t in types]}
+    return out
+
+
+_PY_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,), "integer": (int,), "number": (int, float), "boolean": (bool,), "null": (type(None),),
+}
+
+
+def _branch(node: dict[str, Any], json_type: str) -> dict[str, Any]:
+    """One arm of a `"type": [...]` union. An enum keeps only the values of that arm's type: the API rejects
+    `null` inside a string enum, so `{"type": ["string", "null"], "enum": ["a", None]}` becomes
+    `anyOf: [{"type": "string", "enum": ["a"]}, {"type": "null"}]`."""
+    if json_type == "null":
+        return {"type": "null"}
+    arm = {**node, "type": json_type}
+    if "enum" in arm:
+        wanted = _PY_TYPES.get(json_type, (object,))
+        values = [v for v in arm["enum"] if isinstance(v, wanted) and not (json_type != "boolean" and isinstance(v, bool))]
+        if values:
+            arm["enum"] = values
+        else:
+            arm.pop("enum")
+    return arm
 
 
 class OpenAIProvider(LLMProvider):
@@ -184,6 +277,7 @@ class LocalProvider(LLMProvider):
     def __init__(self, base_url: str, model: str, client: httpx.AsyncClient | None = None):
         super().__init__(model, client)
         self.base_url = base_url.rstrip("/")
+        self.timeout = settings.local_llm_timeout_seconds
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         user: dict[str, Any] = {"role": "user", "content": request.user}
@@ -193,7 +287,11 @@ class LocalProvider(LLMProvider):
             "model": self.model,
             "stream": False,
             "format": request.schema,
-            "options": {"temperature": 0, "num_predict": request.max_tokens},
+            "options": {
+                "temperature": 0,
+                "num_ctx": settings.local_llm_num_ctx,
+                "num_predict": min(request.max_tokens, settings.local_llm_max_output_tokens),
+            },
             "messages": [{"role": "system", "content": request.system}, user],
         }
         data = await self._post(f"{self.base_url}/api/chat", {"content-type": "application/json"}, body)

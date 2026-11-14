@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.approvals import second_person_required
 from app.config import get_settings
 from app.deps import Principal
 from app.errors import ApiError, bad_request, conflict, forbidden, not_found
@@ -409,7 +410,7 @@ async def qualify(db: AsyncSession, p: Principal, supplier: Supplier, note: str 
     state = (await load_state(db, p.org_id, [supplier.id]))[supplier.id]
     if state.missing_required:
         raise ApiError(409, "required_checks_missing", "Required checks are not satisfied: " + ", ".join(state.missing_required))
-    if settings.require_separate_approver and supplier.submitted_by == p.user.id:
+    if supplier.submitted_by == p.user.id and await second_person_required(db, p.org_id):
         raise forbidden("The person who submitted the supplier cannot also qualify it", "segregation_of_duties")
     _transition(db, p, supplier, "qualified", "qualified", note)
     supplier.decided_by, supplier.decided_at = p.user.id, utcnow()

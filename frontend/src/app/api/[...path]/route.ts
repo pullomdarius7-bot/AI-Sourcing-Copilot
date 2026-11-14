@@ -41,6 +41,12 @@ async function forward(req: NextRequest, path: string, body: ArrayBuffer | undef
   };
   if (body !== undefined) headers["content-type"] = req.headers.get("content-type") ?? "application/json";
   if (access) headers.authorization = `Bearer ${access}`;
+  // The export API is called by scripts with an API key instead of a browser session.
+  const clientAuth = req.headers.get("authorization");
+  if (path.startsWith("export/") && clientAuth?.startsWith("Bearer sca_")) headers.authorization = clientAuth;
+  // Stripe signs the raw webhook body; the backend needs the signature to verify it.
+  const stripeSignature = req.headers.get("stripe-signature");
+  if (stripeSignature) headers["stripe-signature"] = stripeSignature;
   return fetch(`${API}/api/v1/${path}${req.nextUrl.search}`, {
     method: req.method,
     headers,
@@ -121,4 +127,4 @@ async function handler(req: NextRequest, { params }: { params: { path: string[] 
   return res;
 }
 
-export { handler as GET, handler as POST, handler as PATCH, handler as DELETE };
+export { handler as GET, handler as POST, handler as PUT, handler as PATCH, handler as DELETE };

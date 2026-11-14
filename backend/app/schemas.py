@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.onboarding import AccountType
 from app.rbac import Role
 from app.security import password_problem
 
@@ -16,10 +17,15 @@ def _strong(value: str) -> str:
 
 
 class RegisterIn(BaseModel):
-    organization_name: str = Field(min_length=2, max_length=200)
+    # A hint from the page the visitor signed up on; the role is confirmed in the onboarding wizard.
+    account_type: AccountType = AccountType.SOLO_BUYER
+    # Optional: an account without a company name is named after its owner.
+    organization_name: str | None = Field(default=None, min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
     password: str
+    # Set when a supplier signs up from an invitation the sourcing engine sent.
+    invite_token: str | None = Field(default=None, max_length=100)
 
     @field_validator("password")
     @classmethod
@@ -105,7 +111,16 @@ class UserOut(BaseModel):
 
 
 class MeOut(UserOut):
+    is_platform_admin: bool = False
     organization_name: str
+    account_type: AccountType
+    onboarding_completed: bool
+    credit_balance: int
+    trial_ends_at: datetime | None
+    plan: str | None
+    subscription_status: str
+    ai_access: bool
+    billing_exempt: bool = False
     permissions: list[str]
 
 
@@ -121,6 +136,8 @@ class OrgOut(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    account_type: AccountType
+    onboarding_completed: bool
     created_at: datetime
 
 
@@ -280,6 +297,7 @@ class JobStatsOut(BaseModel):
     running: int
     succeeded: int
     dead: int
+    cancelled: int = 0
     oldest_queued_age_seconds: int | None
     succeeded_last_hour: int
     avg_duration_ms_last_hour: int | None

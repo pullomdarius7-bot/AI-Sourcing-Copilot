@@ -25,6 +25,9 @@ def backoff_seconds(attempts: int) -> float:
     return delay * random.uniform(0.8, 1.2) if delay else 0.0
 
 
+PRIORITY_TEAM = 10
+
+
 async def enqueue(
     db: AsyncSession,
     *,
@@ -35,8 +38,14 @@ async def enqueue(
     max_attempts: int | None = None,
     delay_seconds: float = 0,
 ) -> Job | None:
-    """Add a job inside the caller's transaction (transactional outbox). None if an identical job is active."""
+    """Add a job inside the caller's transaction (transactional outbox). None if an identical job is active.
+    Sourcing Team accounts get priority processing: their jobs are claimed before everyone else's."""
+    from app.billing.plans import TEAM_PLAN
+    from app.models import Organization
+
+    plan = await db.scalar(select(Organization.plan).where(Organization.id == org_id))
     job = Job(
+        priority=PRIORITY_TEAM if plan == TEAM_PLAN else 0,
         organization_id=org_id,
         kind=kind,
         payload=payload,
@@ -59,7 +68,7 @@ async def claim(db: AsyncSession, worker_id: str) -> Job | None:
     job = await db.scalar(
         select(Job)
         .where(Job.status == "queued", Job.run_at <= now)
-        .order_by(Job.run_at)
+        .order_by(Job.priority.desc(), Job.run_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
@@ -78,7 +87,8 @@ async def claim(db: AsyncSession, worker_id: str) -> Job | None:
 async def complete(db: AsyncSession, job_id: uuid.UUID, result: dict[str, Any] | None) -> None:
     await set_system(db)
     job = await db.get(Job, job_id, with_for_update=True)
-    if job is None:
+    if job is None or job.status == "cancelled":  # stopped while it ran: the stop stands
+        await db.rollback()
         return
     job.status = "succeeded"
     job.result = result
@@ -95,6 +105,9 @@ async def fail(db: AsyncSession, job_id: uuid.UUID, error: str, *, retryable: bo
     job = await db.get(Job, job_id, with_for_update=True)
     if job is None:
         return "dead"
+    if job.status == "cancelled":
+        await db.rollback()
+        return "cancelled"
     job.last_error = error[:4000]
     job.locked_by = None
     job.locked_until = None
@@ -145,6 +158,44 @@ async def prune_finished(db: AsyncSession) -> int:
     )
     await db.commit()
     return result.rowcount or 0
+
+
+STOPPABLE = ("queued", "running")
+RETRYABLE = ("dead", "cancelled")
+
+
+def cancel(job: Job, note: str) -> str:
+    """Stop a job (caller commits). A queued job never starts; a running one is interrupted by its worker within
+    JOB_CANCEL_POLL_SECONDS. Returns the status it had. Retry starts it again from the beginning."""
+    previous = job.status
+    job.status = "cancelled"
+    job.last_error = note[:4000]
+    job.finished_at = utcnow()
+    if previous == "queued":
+        job.locked_by = None
+        job.locked_until = None
+    return previous
+
+
+async def is_cancelled(job_id: uuid.UUID) -> bool:
+    from app.db import SessionLocal
+
+    async with SessionLocal() as db:
+        await set_system(db)
+        status = await db.scalar(select(Job.status).where(Job.id == job_id))
+        await db.rollback()
+    return status == "cancelled"
+
+
+def subjects(job: Job) -> list[uuid.UUID]:
+    """The records a job works on (document, extraction run, lot...), read from its payload."""
+    found = []
+    for value in (job.payload or {}).values():
+        try:
+            found.append(uuid.UUID(str(value)))
+        except ValueError:
+            continue
+    return found
 
 
 async def retry_dead(db: AsyncSession, job: Job) -> None:
@@ -198,6 +249,7 @@ async def stats(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
         "running": by_status.get("running", 0),
         "succeeded": by_status.get("succeeded", 0),
         "dead": by_status.get("dead", 0),
+        "cancelled": by_status.get("cancelled", 0),
         "oldest_queued_age_seconds": max(0, int((utcnow() - oldest).total_seconds())) if oldest else None,
         "succeeded_last_hour": finished or 0,
         "avg_duration_ms_last_hour": int(avg_ms) if avg_ms is not None else None,

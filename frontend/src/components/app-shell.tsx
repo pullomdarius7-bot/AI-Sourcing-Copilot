@@ -2,29 +2,40 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
-import { Activity, Building2, ClipboardCheck, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, Building2, Calculator, ClipboardCheck, CreditCard, Inbox, MessagesSquare, PackageOpen, Radar, SlidersHorizontal, Store, FileText, LayoutDashboard, ListChecks, MessageSquare, Scale, ScrollText, Send, ShieldCheck, Upload, Users, Wrench } from "lucide-react";
 import { api, useFetch } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { CreditBanner, CreditWidget } from "@/components/credit-widget";
 import { MeProvider } from "@/components/me-context";
 
-const NAV = [
+type Side = "buyer" | "supplier";
+const NAV: { href: string; label: string; icon: typeof LayoutDashboard; permission: string | null; side?: Side }[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: null },
-  { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use" },
-  { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read" },
-  { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload" },
-  { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read" },
-  { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review" },
-  { href: "/suppliers", label: "Suppliers", icon: Building2, permission: "suppliers:read" },
-  { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read" },
-  { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read" },
+  { href: "/sourcing", label: "AI Sourcing", icon: Radar, permission: "marketplace:read", side: "buyer" },
+  { href: "/marketplace", label: "Marketplace", icon: Store, permission: "marketplace:read", side: "buyer" },
+  { href: "/deals", label: "Deal analyzer", icon: Calculator, permission: "marketplace:read", side: "buyer" },
+  { href: "/supplier/manifests", label: "Manifests & lots", icon: PackageOpen, permission: "marketplace:read", side: "supplier" },
+  { href: "/supplier/requests", label: "Buyer requests", icon: Inbox, permission: "marketplace:read", side: "supplier" },
+  { href: "/messages", label: "Offers & messages", icon: MessagesSquare, permission: "marketplace:read" },
+  { href: "/assistant", label: "Assistant", icon: MessageSquare, permission: "agent:use", side: "buyer" },
+  { href: "/documents", label: "Documents", icon: FileText, permission: "documents:read", side: "buyer" },
+  { href: "/upload", label: "Upload", icon: Upload, permission: "documents:upload", side: "buyer" },
+  { href: "/requirements", label: "Requirements", icon: ListChecks, permission: "requirements:read", side: "buyer" },
+  { href: "/review", label: "Review queue", icon: ClipboardCheck, permission: "requirements:review", side: "buyer" },
+  { href: "/suppliers", label: "Suppliers", icon: Building2, permission: "suppliers:read", side: "buyer" },
+  { href: "/rfqs", label: "RFQs", icon: Send, permission: "rfqs:read", side: "buyer" },
+  { href: "/reference", label: "Rates & units", icon: Scale, permission: "comparisons:read", side: "buyer" },
   { href: "/team", label: "Team", icon: Users, permission: "users:read" },
+  { href: "/team-tools", label: "Team tools", icon: SlidersHorizontal, permission: "marketplace:trade", side: "buyer" },
+  { href: "/billing", label: "Billing", icon: CreditCard, permission: null },
   { href: "/jobs", label: "Jobs", icon: Activity, permission: "jobs:read" },
   { href: "/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },
   { href: "/security", label: "Security", icon: ShieldCheck, permission: null },
+  { href: "/platform", label: "Back office", icon: Wrench, permission: null },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -32,6 +43,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [leaving, setLeaving] = useState(false);
+  const needsOnboarding = me !== null && !me.onboarding_completed;
+
+  useEffect(() => {
+    if (needsOnboarding) router.replace("/onboarding");
+  }, [needsOnboarding, router]);
 
   async function signOut() {
     setLeaving(true);
@@ -43,7 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  if (loading) return <div className="p-8 text-sm text-muted-foreground">Loading your workspace…</div>;
+  if (loading || needsOnboarding) return <div className="p-8 text-sm text-muted-foreground">Loading your workspace…</div>;
   if (error || !me) return <div className="p-8 text-sm text-destructive">{error?.message ?? "Could not load your account."}</div>;
 
   return (
@@ -57,7 +73,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:pb-0">
-            {NAV.filter((n) => !n.permission || me.permissions.includes(n.permission)).map((n) => {
+            {NAV.filter((n) => {
+              const side: Side = me.account_type === "supplier" ? "supplier" : "buyer";
+              if (n.permission && !me.permissions.includes(n.permission)) return false;
+              if (n.side && n.side !== side) return false;
+              if (n.href === "/platform") return Boolean(me.is_platform_admin);
+              return !(n.href === "/team" && me.account_type === "solo_buyer");
+            }).map((n) => {
               const active = pathname.startsWith(n.href);
               return (
                 <Link
@@ -77,7 +99,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </aside>
         <div className="min-w-0">
-          <header className="flex items-center justify-end gap-3 border-b bg-card px-6 py-3">
+          <header className="flex flex-wrap items-center justify-end gap-3 border-b bg-card px-6 py-3">
+            <CreditWidget me={me} />
             <div className="text-right">
               <p className="text-sm font-medium leading-tight">{me.full_name}</p>
               <p className="text-xs text-muted-foreground">{me.email}</p>
@@ -87,6 +110,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               Sign out
             </Button>
           </header>
+          <CreditBanner me={me} />
           <main className="mx-auto max-w-5xl p-6">{children}</main>
         </div>
       </div>

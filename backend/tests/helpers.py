@@ -33,15 +33,42 @@ def token_from_email(to: str) -> str:
     raise AssertionError(f"no email sent to {to}")
 
 
-async def register_admin(client, email="admin@acme.test", org="Acme Corp", password=PASSWORD):
-    res = await client.post(
-        "/auth/register",
-        json={"organization_name": org, "full_name": "Ada Admin", "email": email, "password": password},
-    )
+_BUYER_ANSWERS = {
+    "product_categories": ["power_tools", "consumer_electronics"], "monthly_budget": "5k_25k",
+    "lot_sizes": ["pallets", "truckloads"],
+}
+ONBOARDING_ANSWERS = {
+    "solo_buyer": _BUYER_ANSWERS,
+    "org_buyer": _BUYER_ANSWERS,
+    "supplier": {
+        "inventory_types": ["customer_returns", "overstock"], "manifest_format": "excel",
+        "dispatch_regions": ["midwest", "south"],
+    },
+}
+
+
+async def register_admin(
+    client, email="admin@acme.test", org="Acme Corp", password=PASSWORD, account_type="org_buyer", onboard=True
+):
+    """Register, verify and sign in the first user of a new account. onboard=False stops before the intake form."""
+    payload = {"account_type": account_type, "full_name": "Ada Admin", "email": email, "password": password}
+    if org is not None:
+        payload["organization_name"] = org
+    res = await client.post("/auth/register", json=payload)
     assert res.status_code == 201, res.text
     verify = await client.post("/auth/verify-email", json={"token": token_from_email(email)})
     assert verify.status_code == 200, verify.text
-    return await login(client, email, password)
+    account = await login(client, email, password)
+    if onboard:
+        await complete_onboarding(client, account, account_type)
+    return account
+
+
+async def complete_onboarding(client, account: "Account", account_type="org_buyer") -> None:
+    res = await client.put(
+        "/onboarding", json={"answers": ONBOARDING_ANSWERS[account_type]}, headers=account.headers
+    )
+    assert res.status_code == 200, res.text
 
 
 async def login(client, email, password=PASSWORD) -> Account:

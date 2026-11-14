@@ -5,11 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import email as mail
+from app.billing.access import access_problem
 from app.config import get_settings
 from app.db import get_db
 from app.deps import Principal, client_ip, get_principal
 from app.errors import not_found
-from app.models import AuthSession, Organization
+from app.models import AuthSession
 from app.ratelimit import auth_rate_limit
 from app.rbac import permissions_for
 from app.schemas import (
@@ -55,6 +56,8 @@ async def register(
     user, raw = await svc.register(
         db,
         organization_name=body.organization_name,
+        account_type=body.account_type.value,
+        invite_token=body.invite_token,
         full_name=body.full_name,
         email=body.email,
         password=body.password,
@@ -161,11 +164,19 @@ async def accept_invitation(body: AcceptInviteIn, request: Request, db: AsyncSes
 
 @router.get("/me", response_model=MeOut)
 async def me(p: Principal = Depends(get_principal), db: AsyncSession = Depends(get_db)):
-    org = await db.get(Organization, p.org_id)
     data = UserOut.model_validate(p.user).model_dump()
     return MeOut(
         **data,
-        organization_name=org.name if org else "",
+        organization_name=p.org.name,
+        is_platform_admin=p.user.is_platform_admin,
+        account_type=p.org.account_type,
+        onboarding_completed=p.org.onboarding_completed,
+        credit_balance=p.org.credit_balance,
+        trial_ends_at=p.org.trial_ends_at,
+        plan=p.org.plan,
+        subscription_status=p.org.subscription_status,
+        ai_access=access_problem(p.org) is None,
+        billing_exempt=p.org.billing_exempt,
         permissions=permissions_for(p.user.role),
     )
 

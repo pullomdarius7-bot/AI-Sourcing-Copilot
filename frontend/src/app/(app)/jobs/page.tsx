@@ -8,9 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useMe } from "@/components/me-context";
 import { api, errorMessage, useFetch } from "@/lib/api";
 import type { AiAuditEntry, JobItem, JobStats } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
-const STATUS_VARIANT = { queued: "caution", running: "default", succeeded: "neutral", dead: "destructive" } as const;
+const STATUS_VARIANT = { queued: "caution", running: "default", succeeded: "neutral", dead: "destructive", cancelled: "neutral" } as const;
+const STATUS_LABEL: Record<string, string> = { dead: "dead-lettered", cancelled: "stopped" };
 
 function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
@@ -44,6 +45,18 @@ export default function JobsPage() {
   }, [allowed, stats.reload, jobs.reload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!allowed) return <Alert variant="error">Your role cannot view job monitoring.</Alert>;
+
+  async function stop(id: string, kind: string) {
+    if (!window.confirm(`Stop this ${kind} job? Anything it has not finished is discarded; Retry starts it again from the beginning.`)) return;
+    setError(null);
+    try {
+      await api(`jobs/${id}/cancel`, { method: "POST" });
+      stats.reload();
+      jobs.reload();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
 
   async function retry(id: string) {
     setError(null);
@@ -93,6 +106,7 @@ export default function JobsPage() {
               <option value="running">Running</option>
               <option value="succeeded">Succeeded</option>
               <option value="dead">Dead-lettered</option>
+              <option value="cancelled">Stopped</option>
             </select>
           </div>
         </CardHeader>
@@ -112,13 +126,20 @@ export default function JobsPage() {
                 <tr key={j.id}>
                   <td className="py-2 pr-4 font-mono text-xs">{j.kind}</td>
                   <td className="py-2 pr-4">
-                    <Badge variant={STATUS_VARIANT[j.status]}>{j.status === "dead" ? "dead-lettered" : j.status}</Badge>
+                    <Badge variant={STATUS_VARIANT[j.status]}>{STATUS_LABEL[j.status] ?? j.status}</Badge>
                   </td>
                   <td className="py-2 pr-4">{j.attempts}/{j.max_attempts}</td>
                   <td className="whitespace-nowrap py-2 pr-4 text-muted-foreground">{formatDate(j.created_at)}</td>
                   <td className="max-w-xs py-2">
-                    {j.last_error && <p className="truncate text-xs text-destructive" title={j.last_error}>{j.last_error}</p>}
-                    {j.status === "dead" && me.permissions.includes("jobs:manage") && (
+                    {j.last_error && (
+                      <p className={cn("truncate text-xs", j.status === "cancelled" ? "text-muted-foreground" : "text-destructive")} title={j.last_error}>{j.last_error}</p>
+                    )}
+                    {me.permissions.includes("jobs:manage") && (j.status === "queued" || j.status === "running") && (
+                      <Button size="sm" variant="outline" className="mt-1" onClick={() => stop(j.id, j.kind)}>
+                        Stop
+                      </Button>
+                    )}
+                    {me.permissions.includes("jobs:manage") && (j.status === "dead" || j.status === "cancelled") && (
                       <Button size="sm" variant="outline" className="mt-1" onClick={() => retry(j.id)}>
                         Retry
                       </Button>

@@ -106,14 +106,15 @@ async def _redeem_email_token(db: AsyncSession, raw: str, purpose: str) -> tuple
 
 # --- Registration & verification --------------------------------------------
 async def register(
-    db: AsyncSession, *, organization_name: str, full_name: str, email: str, password: str,
-    client: ClientInfo,
+    db: AsyncSession, *, organization_name: str | None, full_name: str, email: str, password: str,
+    client: ClientInfo, account_type: str = "solo_buyer", invite_token: str | None = None,
 ) -> tuple[User, str | None]:
     await set_system(db)
     email = normalize_email(email)
     if await db.scalar(select(User.id).where(User.email == email)):
         raise conflict("email_taken", "An account with this email already exists")
-    org = Organization(name=organization_name.strip(), slug=slugify(organization_name))
+    org_name = (organization_name or "").strip() or full_name.strip()
+    org = Organization(name=org_name, slug=slugify(org_name), account_type=account_type)
     db.add(org)
     await db.flush()
     user = User(
@@ -129,7 +130,17 @@ async def register(
     raw = None
     if settings.require_email_verification:
         raw = await create_email_token(db, user, VERIFY, timedelta(hours=settings.verify_token_hours))
-    record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip)
+    if invite_token and account_type == "supplier":
+        from app.sourcing import guest, invites
+
+        invite = await invites.mark_joined(db, invite_token, org.id)
+        if invite is not None:
+            org.signup_promo = "invite_first_month"  # first paid month discounted
+            converted = await guest.convert_on_join(db, invite, org.id, user.id)
+            record(db, org_id=org.id, user_id=user.id, action="supplier_invite.accepted", ip=client.ip,
+                   meta={"quotes_converted": converted})
+    record(db, org_id=org.id, user_id=user.id, action="auth.register", ip=client.ip,
+           meta={"account_type": account_type})
     await db.refresh(user)
     await db.commit()
     return user, raw
@@ -449,6 +460,10 @@ async def accept_invitation(
         raise bad_request("invalid_token", "This invitation is invalid or has expired")
     if await db.scalar(select(User.id).where(User.email == invite.email)):
         raise conflict("email_taken", "An account with this email already exists")
+    from app.billing import seats
+
+    org = await db.scalar(select(Organization).where(Organization.id == invite.organization_id).with_for_update())
+    await seats.ensure_free_seat(db, org, already_counted=True)  # the plan may have shrunk since the invitation
     now = utcnow()
     user = User(
         organization_id=invite.organization_id,

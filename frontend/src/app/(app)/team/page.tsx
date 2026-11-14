@@ -19,6 +19,8 @@ export default function TeamPage() {
   const canManage = me.permissions.includes("users:manage");
   const canInvite = me.permissions.includes("invitations:manage");
   const users = useFetch<TeamUser[]>("users");
+  const seats = useFetch<{ used: number; limit: number | null }>("seats");
+  const full = seats.data?.limit != null && seats.data.used >= seats.data.limit;
   const invites = useFetch<Invitation[]>(canInvite ? "invitations" : null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export default function TeamPage() {
   }
 
   const update = (id: string, patch: Record<string, unknown>, success: string) =>
-    run(() => api(`users/${id}`, { method: "PATCH", body: patch }), success, users.reload);
+    run(() => api(`users/${id}`, { method: "PATCH", body: patch }), success, () => { users.reload(); seats.reload(); });
 
   return (
     <div className="space-y-6">
@@ -50,7 +52,14 @@ export default function TeamPage() {
       <Card>
         <CardHeader>
           <CardTitle>People</CardTitle>
-          <CardDescription>Everyone with access to {me.organization_name}.</CardDescription>
+          <CardDescription>
+            Everyone with access to {me.organization_name}.
+            {seats.data?.limit != null && (
+              <> {seats.data.used} of {seats.data.limit} seats used (active people plus open invitations).
+                {full && <> All seats are taken: deactivate someone, revoke an invitation or <a href="/billing" className="text-primary hover:underline">upgrade the plan</a>.</>}
+              </>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -130,6 +139,7 @@ export default function TeamPage() {
                   () => {
                     setInviteEmail("");
                     invites.reload();
+                    seats.reload();
                   },
                 );
               }}
@@ -158,7 +168,7 @@ export default function TeamPage() {
                       {i.email} <Badge className="ml-2">{i.role}</Badge>
                       <span className="ml-2 text-xs text-muted-foreground">expires {formatDate(i.expires_at)}</span>
                     </span>
-                    <Button variant="ghost" size="sm" onClick={() => run(() => api(`invitations/${i.id}`, { method: "DELETE" }), "Invitation revoked.", invites.reload)}>
+                    <Button variant="ghost" size="sm" onClick={() => run(() => api(`invitations/${i.id}`, { method: "DELETE" }), "Invitation revoked.", () => { invites.reload(); seats.reload(); })}>
                       Revoke
                     </Button>
                   </li>

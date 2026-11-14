@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import gateway
 from app.ai.service import get_ai_service
+from app.billing.plans import DEEP_ANALYSIS
 from app.db import get_db, set_tenant
 from app.deps import Principal, require_permission
 from app.errors import conflict, not_found
@@ -114,6 +116,7 @@ async def start_extraction(doc_id: uuid.UUID, p: Principal = Depends(require_per
         raise conflict("not_ready", "The document must be scanned and have extractable text first")
     if not get_ai_service().providers:
         raise conflict("no_ai_provider", "No AI provider is configured")
+    await gateway.check(db, p.org_id, DEEP_ANALYSIS)  # 402 here, before any job is queued
     run = await svc.create_run(db, p, doc)
     job = await queue.enqueue(
         db, org_id=p.org_id, kind="requirements.extract", payload={"run_id": str(run.id), "document_id": str(doc.id)},

@@ -7,6 +7,8 @@ import socket
 import time
 import uuid
 
+from sqlalchemy import select
+
 from app.config import get_settings
 from app.db import SessionLocal, set_tenant
 from app.jobs import queue
@@ -14,6 +16,10 @@ from app.jobs.errors import PermanentError
 from app.jobs.handlers import HANDLERS, ON_DEAD
 
 logger = logging.getLogger("app.worker")
+
+
+class JobStopped(Exception):
+    """Someone pressed Stop on the job while it ran."""
 settings = get_settings()
 
 
@@ -39,9 +45,11 @@ class Worker:
             error, retryable = f"No handler registered for job kind '{job.kind}'", False
         else:
             try:
-                async with SessionLocal() as db:
-                    await set_tenant(db, job.organization_id)
-                    result = await asyncio.wait_for(handler(db, job), timeout=settings.job_timeout_seconds)
+                result = await self._run(handler, job)
+            except JobStopped:
+                logger.info("job %s (%s) stopped by a user", job.id, job.kind)
+                await self._stopped(job)
+                return
             except PermanentError as exc:
                 error, retryable = str(exc), False
             except TimeoutError:
@@ -55,9 +63,51 @@ class Worker:
                 logger.info("job %s (%s) succeeded", job.id, job.kind)
                 return
             outcome = await queue.fail(db, job.id, error, retryable=retryable)
+        if outcome == "cancelled":
+            return
         logger.warning("job %s (%s) attempt %s failed -> %s: %s", job.id, job.kind, job.attempts, outcome, error)
         if outcome == "dead":
             await self._dead(job, error)
+
+    async def _run(self, handler, job):
+        """Run the handler, checking every few seconds whether someone pressed Stop (and enforcing the timeout)."""
+        async def work():
+            async with SessionLocal() as db:
+                await set_tenant(db, job.organization_id)
+                return await handler(db, job)
+
+        task = asyncio.create_task(work())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + settings.job_timeout_seconds
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError
+                done, _ = await asyncio.wait({task}, timeout=min(settings.job_cancel_poll_seconds, remaining))
+                if task in done:
+                    return task.result()
+                if await queue.is_cancelled(job.id):
+                    raise JobStopped
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _stopped(self, job) -> None:
+        """After an interrupted job: give back credits it still held and mark its document or run as stopped."""
+        from app.ai import gateway
+        from app.db import set_system
+        from app.models import Job
+
+        async with SessionLocal() as db:
+            await set_tenant(db, job.organization_id)
+            if await gateway.release_held(db, job.organization_id, queue.subjects(job)):
+                await db.commit()
+        async with SessionLocal() as db:
+            await set_system(db)
+            note = await db.scalar(select(Job.last_error).where(Job.id == job.id))
+        await self._dead(job, note or "Stopped")
 
     async def _dead(self, job, error: str) -> None:
         hook = ON_DEAD.get(job.kind)

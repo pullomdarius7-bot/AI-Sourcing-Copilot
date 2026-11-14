@@ -7,8 +7,11 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.service import get_ai_service
+from app.ai import gateway
+from app.ai.service import get_ai_service, input_limit
+from app.approvals import second_person_required
 from app.audit import record
+from app.billing.plans import DEEP_ANALYSIS
 from app.config import get_settings
 from app.deps import Principal
 from app.errors import ApiError, bad_request, conflict, forbidden, not_found
@@ -103,9 +106,22 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
         raise PermanentError("The document has no extractable text")
     index = gr.TextIndex(text)
     run.source_text_sha256 = sha(text)
-    chunks = chunk_text(text, settings.extraction_chunk_chars, settings.extraction_chunk_overlap, settings.extraction_max_chunks)
-
     service = get_ai_service()
+    # Chunks never exceed what one call may carry (smaller with a model on the server's own CPU).
+    size = min(settings.extraction_chunk_chars, input_limit(service.providers))
+    chunks = chunk_text(text, size, min(settings.extraction_chunk_overlap, size // 10), settings.extraction_max_chunks)
+    try:  # one charge covers every chunk of the run
+        permit = await gateway.acquire(db, run.organization_id, DEEP_ANALYSIS, run.id, user_id=run.created_by)
+    except gateway.PaymentRequired as exc:
+        raise PermanentError(exc.message) from exc
+    try:
+        return await _execute_paid_run(db, run, doc, permit, service, text, index, chunks)
+    except BaseException:
+        await gateway.release(db, permit)
+        raise
+
+
+async def _execute_paid_run(db, run, doc, permit, service, text, index, chunks) -> dict[str, Any]:
     all_reqs: list[gr.GReq] = []
     all_unspecified: list[gr.GUnspecified] = []
     run_flags: list[dict[str, Any]] = []
@@ -118,7 +134,7 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
         if len(chunks) > 1:
             instruction += f" This is part {n} of {len(chunks)} of a longer document; extract only what this part states."
         result = await service.structured_call(
-            db, doc, user_id=run.created_by, purpose=PURPOSE, system=SYSTEM_PROMPT,
+            db, doc, permit=permit, user_id=run.created_by, purpose=PURPOSE, system=SYSTEM_PROMPT,
             schema=EXTRACTION_JSON_SCHEMA, schema_name=EXTRACTION_SCHEMA_NAME, text=text[start:end],
             validate=validate_raw, instruction=instruction,
         )
@@ -170,6 +186,7 @@ async def execute_run(db: AsyncSession, run: ExtractionRun, doc: Document) -> di
     counts = {"requirements": len(grounded.requirements), "parameters": n_params, "unknown": sum(
         1 for r in grounded.requirements for q in r.params if q.unknown) + len(grounded.unknowns)}
     emit(db, run, "run", run.id, "extracted", None, "extracting", run.status, after=counts)
+    await gateway.settle(db, permit)  # the charge becomes final together with the stored result
     await db.commit()
     return counts
 
@@ -487,7 +504,7 @@ async def approve_run(db: AsyncSession, p: Principal, run_id: uuid.UUID, note: s
     doc = await db.get(Document, run.document_id)
     if doc is None or not doc.extracted_text or sha(doc.extracted_text) != run.source_text_sha256:
         raise conflict("stale_source", "The document text changed since this extraction. Run the extraction again.")
-    if settings.require_separate_approver:
+    if await second_person_required(db, run.organization_id):
         actors = {run.created_by}
         for model in (Requirement, Parameter):
             actors |= set(await db.scalars(select(model.verified_by).where(model.run_id == run.id, model.verified_by.is_not(None))))

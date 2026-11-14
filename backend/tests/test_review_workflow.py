@@ -240,6 +240,28 @@ async def test_whoever_started_the_extraction_cannot_approve_it(client, worker, 
     assert (await post(client, admin, f"/extraction-runs/{run_id}/approve")).status_code == 200
 
 
+async def test_a_one_person_account_approves_its_own_extraction(client, worker):
+    """Separation of duties needs a second person; an account with one active user does everything itself."""
+    solo = await register_admin(client, email="solo@shop.test", org=None, account_type="solo_buyer")
+    doc_id = await ready_document(client, worker, solo)
+    run_id, _ = await extract(client, worker, solo, doc_id)
+    await resolve_all(client, solo, run_id)
+    res = await post(client, solo, f"/extraction-runs/{run_id}/approve")
+    assert res.status_code == 200 and res.json()["status"] == "approved"
+
+
+async def test_the_second_person_rule_returns_when_a_colleague_joins(client, worker):
+    admin = await register_admin(client)
+    doc_id = await ready_document(client, worker, admin)
+    run_id, _ = await extract(client, worker, admin, doc_id)
+    await resolve_all(client, admin, run_id)
+    buyer = await add_member(client, admin, "buyer@acme.test", "buyer")
+    res = await post(client, admin, f"/extraction-runs/{run_id}/approve")
+    assert res.status_code == 403 and res.json()["error"]["code"] == "segregation_of_duties"
+    await client.patch(f"/users/{buyer.user_id}", json={"is_active": False}, headers=admin.headers)
+    assert (await post(client, admin, f"/extraction-runs/{run_id}/approve")).status_code == 200  # alone again
+
+
 async def test_rejecting_a_run(client, worker):
     t = await team(client, worker)
     assert (await post(client, t.approver, f"/extraction-runs/{t.run_id}/reject", {"reason": "x"})).status_code == 422

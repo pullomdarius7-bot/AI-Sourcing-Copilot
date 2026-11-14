@@ -20,6 +20,8 @@ x-backend-env: &backend-env
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-auto}
   STORAGE_LOCAL_DIR: /data/uploads
+  # On the volume the API and worker share, so the back office health check sees the worker's heartbeat
+  WORKER_HEARTBEAT_FILE: /data/uploads/.worker-heartbeat
   MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-copilot-minio}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?run ./scripts/init-env.sh first}
@@ -30,6 +32,9 @@ x-backend-env: &backend-env
   # Job workers
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
   JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  # With a local model, raise both (e.g. 1800 / 2400): one document can need several slow calls.
+  JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
+  JOB_VISIBILITY_SECONDS: ${JOB_VISIBILITY_SECONDS:-600}
   # Requirement extraction & review
   REQUIRE_SEPARATE_APPROVER: ${REQUIRE_SEPARATE_APPROVER:-true}
   BULK_VERIFY_MIN_CONFIDENCE: ${BULK_VERIFY_MIN_CONFIDENCE:-0.85}
@@ -47,16 +52,59 @@ x-backend-env: &backend-env
   AI_PROVIDER_ORDER: ${AI_PROVIDER_ORDER:-local,anthropic,openai}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+  ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-medium}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
   LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
   LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-llama3.1:8b}
+  LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-900}
+  LOCAL_LLM_NUM_CTX: ${LOCAL_LLM_NUM_CTX:-8192}
+  LOCAL_LLM_MAX_INPUT_CHARS: ${LOCAL_LLM_MAX_INPUT_CHARS:-12000}
+  AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-120}
   # Sourcing assistant (works without any model: deterministic mode)
   AGENT_MODE: ${AGENT_MODE:-auto}
   AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-4}
   AGENT_RATE_PER_MINUTE: ${AGENT_RATE_PER_MINUTE:-20}
   AGENT_INDEX_ON_DEMAND_DOCS: ${AGENT_INDEX_ON_DEMAND_DOCS:-20}
+  # Billing (Stripe) and credit metering
+  BILLING_ENFORCED: ${BILLING_ENFORCED:-true}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  STRIPE_PRICE_SOLO_BUYER_MONTHLY: ${STRIPE_PRICE_SOLO_BUYER_MONTHLY:-}
+  STRIPE_PRICE_ENTERPRISE_BUYER_MONTHLY: ${STRIPE_PRICE_ENTERPRISE_BUYER_MONTHLY:-}
+  STRIPE_PRICE_SUPPLIER_MONTHLY: ${STRIPE_PRICE_SUPPLIER_MONTHLY:-}
+  TRIAL_DAYS: ${TRIAL_DAYS:-7}
+  TRIAL_CREDITS: ${TRIAL_CREDITS:-10}
+  PLAN_CREDITS_SOLO: ${PLAN_CREDITS_SOLO:-25}
+  PLAN_CREDITS_ENTERPRISE: ${PLAN_CREDITS_ENTERPRISE:-250}
+  PLAN_CREDITS_SUPPLIER: ${PLAN_CREDITS_SUPPLIER:-100}
+  CREDIT_COST_DEEP_ANALYSIS: ${CREDIT_COST_DEEP_ANALYSIS:-1}
+  CREDIT_COST_ASSISTANT_ANSWER: ${CREDIT_COST_ASSISTANT_ANSWER:-1}
+  TOPUP_PRICE_CENTS_SOLO: ${TOPUP_PRICE_CENTS_SOLO:-299}
+  TOPUP_PRICE_CENTS_ENTERPRISE: ${TOPUP_PRICE_CENTS_ENTERPRISE:-99}
+  TOPUP_PRICE_CENTS_SUPPLIER: ${TOPUP_PRICE_CENTS_SUPPLIER:-149}
+  TOPUP_MIN_CREDITS: ${TOPUP_MIN_CREDITS:-5}
+  TOPUP_MAX_CREDITS: ${TOPUP_MAX_CREDITS:-500}
+  TOPUP_AVAILABLE_AT_OR_BELOW: ${TOPUP_AVAILABLE_AT_OR_BELOW:-5}
+  TRIAL_SEATS: ${TRIAL_SEATS:-5}
+  SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
+  # Back office: platform admins need two-factor sign-in while this is true
+  PLATFORM_ADMIN_REQUIRES_MFA: ${PLATFORM_ADMIN_REQUIRES_MFA:-true}
+  # AI sourcing engine: web supplier discovery and supplier invitations
+  SEARCH_PROVIDER: ${SEARCH_PROVIDER:-}
+  SEARXNG_URL: ${SEARXNG_URL:-}
+  BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+  CREDIT_COST_WEB_SOURCING: ${CREDIT_COST_WEB_SOURCING:-2}
+  WEB_SOURCING_MAX_SITES: ${WEB_SOURCING_MAX_SITES:-5}
+  INVITES_PER_REQUEST: ${INVITES_PER_REQUEST:-3}
+  INVITE_FIRST_MONTH_DISCOUNT_PCT: ${INVITE_FIRST_MONTH_DISCOUNT_PCT:-75}
+  STRIPE_INVITE_COUPON_ID: ${STRIPE_INVITE_COUPON_ID:-invited-supplier-first-month}
+  SUPPLIER_INVITES: ${SUPPLIER_INVITES:-auto}
+  INVITE_COOLDOWN_DAYS: ${INVITE_COOLDOWN_DAYS:-90}
+  INVITE_DAILY_LIMIT: ${INVITE_DAILY_LIMIT:-200}
+  INVITE_SENDER_POSTAL_ADDRESS: ${INVITE_SENDER_POSTAL_ADDRESS:-}
+  PLATFORM_NAME: ${PLATFORM_NAME:-Sourcing Copilot}
   # Monitoring: bearer token Prometheus uses for /metrics
   METRICS_TOKEN: ${METRICS_TOKEN:?run make env-upgrade (existing install) or make init}
 
@@ -164,6 +212,17 @@ services:
       - ollama_data:/root/.ollama
     ports:
       - "127.0.0.1:11434:11434"
+
+  # Self-hosted metasearch for the AI sourcing engine: docker compose --profile search up -d, then set
+  # SEARCH_PROVIDER=searxng and SEARXNG_URL=http://searxng:8080 in .env. Pin SEARXNG_IMAGE to a tested release.
+  searxng:
+    image: ${SEARXNG_IMAGE:-searxng/searxng:latest}
+    profiles: ["search"]
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me}
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
 
   frontend:
     image: copilot-frontend:${APP_VERSION:-local}

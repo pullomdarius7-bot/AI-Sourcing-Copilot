@@ -1,10 +1,75 @@
 export type Role = "requester" | "buyer" | "approver" | "admin" | "auditor";
 export const ROLES: Role[] = ["requester", "buyer", "approver", "admin", "auditor"];
 
+export type AccountType = "solo_buyer" | "org_buyer" | "supplier";
+
+export type SubscriptionStatus = "none" | "trialing" | "active" | "past_due" | "cancelled";
+
+export interface Billing {
+  plan: string | null;
+  subscription_status: SubscriptionStatus;
+  credit_balance: number;
+  trial_ends_at: string | null;
+  current_period_end: string | null;
+  ai_access: boolean;
+  ai_access_reason: string | null;
+  billing_exempt?: boolean;
+  can_manage: boolean;
+  has_billing_profile: boolean;
+  checkout_trial_days: number | null;
+  purchased_credits: number;
+  team_features: boolean;
+  support: { email: string | null; priority: boolean };
+  promo: { percent_off: number; plan: string } | null;
+  topup: { available: boolean; reason: string | null; price_cents: number | null; min_credits: number; max_credits: number; available_at_or_below: number };
+  seats: { used: number; limit: number | null };
+  plans: { key: string; name: string; price_cents: number; monthly_credits: number; seats: number | null; topup_price_cents: number }[];
+  transactions: {
+    id: number;
+    kind: string;
+    action: string | null;
+    subject_id: string | null;
+    delta: number;
+    balance_after: number;
+    state: "held" | "settled" | "refunded";
+    note: string | null;
+    created_at: string;
+  }[];
+}
+
+export interface OnboardingField {
+  key: string;
+  label: string;
+  kind: "select" | "multiselect";
+  options: { value: string; label: string }[];
+  help: string;
+}
+
+export interface OnboardingState {
+  account_type: AccountType;
+  organization_name: string;
+  completed: boolean;
+  can_edit: boolean;
+  roles: { value: AccountType; label: string; description: string }[];
+  forms: Record<AccountType, OnboardingField[]>;
+  profile: Record<string, string | string[]>;
+  credit_balance: number;
+  trial_ends_at: string | null;
+}
+
 export interface Me {
   id: string;
+  billing_exempt?: boolean;
+  is_platform_admin?: boolean;
   organization_id: string;
   organization_name: string;
+  account_type: AccountType;
+  onboarding_completed: boolean;
+  credit_balance: number;
+  trial_ends_at: string | null;
+  plan: string | null;
+  subscription_status: SubscriptionStatus;
+  ai_access: boolean;
   email: string;
   full_name: string;
   role: Role;
@@ -58,7 +123,7 @@ export interface AuditEntry {
 export interface JobBrief {
   id: string;
   kind: string;
-  status: "queued" | "running" | "succeeded" | "dead";
+  status: "queued" | "running" | "succeeded" | "dead" | "cancelled";
   attempts: number;
   max_attempts: number;
   run_at: string;
@@ -138,6 +203,7 @@ export interface JobStats {
   running: number;
   succeeded: number;
   dead: number;
+  cancelled: number;
   oldest_queued_age_seconds: number | null;
   succeeded_last_hour: number;
   avg_duration_ms_last_hour: number | null;

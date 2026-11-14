@@ -4,8 +4,8 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Sourcing Copilot",
-  description: "Turn requirements into comparable supplier quotes.",
+  title: "Sourcing Copilot",
+  description: "Parse wholesale manifests, calculate true net margins, and secure profitable liquidation lots.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

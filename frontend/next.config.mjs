@@ -2,6 +2,8 @@
 const nextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  // Android (Termux) has no native Next.js compiler: use the WebAssembly one there. Ignored everywhere else.
+  experimental: process.platform === "android" ? { useWasmBinary: true } : {},
   async headers() {
     return [
       {
